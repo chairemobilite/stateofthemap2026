@@ -7,3 +7,13 @@ repository.workspace = true
 description = "Backend for the entrance analyser sampling tool (OSM Science 2026)."
 
 [dependencies]
+chrono = { version = "0.4.44", features = ["serde"] }
+geo = "0.33.1"
+rand = "0.10.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tempfile = "3.27.0"
+uuid = { version = "1.23.1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+rstest = "0.26.1"
