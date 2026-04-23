@@ -45,7 +45,7 @@ bounding boxes are persisted to `entranceAnalyser/data/kept_bboxes.json`.
 
 ### Quickstart
 
-Prerequisites: Rust stable (1.90+), Node.js 22+.
+Prerequisites: Rust stable (1.90+), Node.js 22+, Yarn 1.x.
 
 ```bash
 # Backend
@@ -55,9 +55,9 @@ cargo test
 
 # Frontend
 cd frontend
-npm install
-npm run build   # production build
-npm run dev     # local dev server
+yarn install
+yarn build      # production build
+yarn dev        # local dev server
 ```
 
 The backend runs on `127.0.0.1:3000`, the frontend dev server on
