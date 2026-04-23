@@ -6,7 +6,7 @@
 //! - `bbox`      → replace the `bbox` GeoJSON source and fit the viewport.
 //!
 //! `setStyle` wipes every custom source/layer, so the bbox overlay is
-//! re-installed on the next `style.load` event.
+//! reinstalled every time `style.load` fires.
 
 import { useEffect, useRef } from 'react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
@@ -25,7 +25,11 @@ const BBOX_SOURCE = 'bbox';
 const BBOX_FILL_LAYER = 'bbox-fill';
 const BBOX_OUTLINE_LAYER = 'bbox-outline';
 
-/** (Re)install the bbox source + layers on an already-loaded style. */
+/**
+ * (Re)install the bbox source + layers. The caller is responsible for
+ * checking that the map's style is loaded — on an unloaded style
+ * `getLayer` / `addSource` throw.
+ */
 function installBboxLayers(map: MapLibreMap, bbox: Bbox | null) {
     if (map.getLayer(BBOX_FILL_LAYER)) map.removeLayer(BBOX_FILL_LAYER);
     if (map.getLayer(BBOX_OUTLINE_LAYER)) map.removeLayer(BBOX_OUTLINE_LAYER);
@@ -50,13 +54,16 @@ function installBboxLayers(map: MapLibreMap, bbox: Bbox | null) {
 export function MapView({ basemapId, bbox }: MapViewProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
-    // Latest bbox, read by the `style.load` handler after a basemap switch.
+    // Keep the latest bbox reachable from the `style.load` handler, which
+    // fires outside of React's update cycle.
     const bboxRef = useRef<Bbox | null>(bbox);
-    bboxRef.current = bbox;
+    useEffect(() => {
+        bboxRef.current = bbox;
+    });
 
-    // Create the map once. Basemap and bbox are kept in sync by the
-    // effects below — the MapLibre instance has its own lifecycle and
-    // must not be rebuilt on every prop change.
+    // Create the map once. `style.load` is the single point where the
+    // bbox overlay is (re)installed, so we never touch the style while
+    // it is still loading.
     useEffect(() => {
         if (!containerRef.current) return;
 
@@ -69,9 +76,15 @@ export function MapView({ basemapId, bbox }: MapViewProps) {
         });
         mapRef.current = map;
 
-        // `setStyle` wipes custom layers, so re-install the bbox overlay
-        // every time the style reloads.
-        map.on('style.load', () => installBboxLayers(map, bboxRef.current));
+        map.on('style.load', () => {
+            installBboxLayers(map, bboxRef.current);
+            if (bboxRef.current) {
+                map.fitBounds(toBounds(bboxRef.current), { padding: 40, duration: 500 });
+            }
+        });
+        // Surface MapLibre errors in the dev console — they are otherwise
+        // swallowed silently and show up only as a blank canvas.
+        map.on('error', (e) => console.error('[MapLibre]', e.error ?? e));
 
         return () => {
             map.remove();
@@ -80,24 +93,41 @@ export function MapView({ basemapId, bbox }: MapViewProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Swap the style when the active basemap changes.
+    // Swap the style when the active basemap changes. Skip the first
+    // render because the mount effect already initialised the map with
+    // the current basemap — calling `setStyle` with the same style
+    // while it is still loading triggers a full rebuild and races with
+    // the initial tile fetches.
+    const lastBasemapRef = useRef<BasemapId>(basemapId);
     useEffect(() => {
+        if (lastBasemapRef.current === basemapId) return;
+        lastBasemapRef.current = basemapId;
         const map = mapRef.current;
         if (!map) return;
         const basemap = findBasemap(basemapId);
-        if (basemap) {
-            map.setStyle(basemap.style);
-        }
+        if (basemap) map.setStyle(basemap.style);
     }, [basemapId]);
 
-    // Sync the bbox overlay and fit the viewport to it.
+    // Sync the bbox overlay. If the style is loaded we install it
+    // immediately; otherwise we wait for the first `idle` event so the
+    // first bbox arriving during the initial style load is not dropped.
     useEffect(() => {
         const map = mapRef.current;
         if (!map) return;
-        installBboxLayers(map, bbox);
-        if (bbox) {
-            map.fitBounds(toBounds(bbox), { padding: 40, duration: 500 });
+        const apply = () => {
+            installBboxLayers(map, bbox);
+            if (bbox) {
+                map.fitBounds(toBounds(bbox), { padding: 40, duration: 500 });
+            }
+        };
+        if (map.isStyleLoaded()) {
+            apply();
+            return;
         }
+        map.once('idle', apply);
+        return () => {
+            map.off('idle', apply);
+        };
     }, [bbox]);
 
     return <div ref={containerRef} className="map-view" data-testid="map-view" />;

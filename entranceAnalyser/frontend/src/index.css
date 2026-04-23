@@ -23,8 +23,13 @@ body {
 }
 
 .map-view {
+    /* MapLibre adds `.maplibregl-map { position: relative }` on top of
+       our class, which cancels `inset: 0`; set width/height explicitly
+       so the container fills `.app` regardless of the applied position. */
     position: absolute;
     inset: 0;
+    width: 100%;
+    height: 100%;
 }
 
 .basemap-toggle {
@@ -53,4 +58,86 @@ body {
     background: #1d4ed8;
     color: #fff;
     border-color: #1d4ed8;
+}
+
+.sampling-panel {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    z-index: 1;
+    width: 18rem;
+    padding: 1rem 1.25rem;
+    background: rgba(255, 255, 255, 0.94);
+    border-radius: 8px;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
+    color: #111;
+}
+
+.sampling-panel h2 {
+    margin: 0 0 0.75rem;
+    font-size: 1rem;
+}
+
+.sampling-panel dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 0.75rem;
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+}
+
+.sampling-panel dt {
+    color: #555;
+}
+
+.sampling-panel dd {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.sampling-panel__actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.sampling-panel__actions button {
+    flex: 1;
+    border: 1px solid #1d4ed8;
+    background: transparent;
+    color: #1d4ed8;
+    padding: 0.4rem 0.5rem;
+    border-radius: 4px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.sampling-panel__actions button:first-child {
+    background: #1d4ed8;
+    color: #fff;
+}
+
+.sampling-panel__actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.sampling-panel__count {
+    margin: 0 0 0.25rem;
+    font-size: 0.9rem;
+}
+
+.sampling-panel__status {
+    margin: 0;
+    color: #555;
+    font-size: 0.85rem;
+}
+
+.sampling-panel__error {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem 0.75rem;
+    background: #fee2e2;
+    color: #991b1b;
+    border-radius: 4px;
+    font-size: 0.85rem;
 }
