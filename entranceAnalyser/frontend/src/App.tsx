@@ -9,7 +9,7 @@ function App() {
 
     return (
         <div className="app">
-            <MapView basemapId={basemapId} />
+            <MapView basemapId={basemapId} bbox={null} />
             <BasemapToggle basemaps={BASEMAPS} activeId={basemapId} onChange={setBasemapId} />
         </div>
     );
