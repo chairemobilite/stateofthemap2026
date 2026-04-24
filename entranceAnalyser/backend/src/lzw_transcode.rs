@@ -44,7 +44,9 @@ pub enum TranscodeError {
     /// `gdal_translate` ran but exited non-zero. The stderr is
     /// inherited from the child so the operator already saw the
     /// underlying complaint; we just surface the exit code.
-    GdalFailed { status: Option<i32> },
+    GdalFailed {
+        status: Option<i32>,
+    },
 }
 
 impl std::fmt::Display for TranscodeError {
@@ -188,7 +190,9 @@ mod tests {
         let path = dir.join(name);
         let mut buf = Cursor::new(Vec::<u8>::new());
         {
-            let mut enc = TiffEncoder::new(&mut buf).unwrap().with_compression(compression);
+            let mut enc = TiffEncoder::new(&mut buf)
+                .unwrap()
+                .with_compression(compression);
             let pixels: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
             enc.write_image::<Gray32Float>(2, 2, &pixels).unwrap();
         }
