@@ -12,8 +12,14 @@ export interface Bbox {
     east: number;
     north: number;
     center: [number, number];
-    population: number | null;
-    filtered: boolean;
+    /** Side length of the bbox in kilometres. */
+    cell_size_km: number;
+    /** Total population inside the bbox (from GHS-POP). */
+    population: number;
+    /** `population / cell_size_km²`. */
+    density_per_km2: number;
+    /** `density_per_km2 / max_density_per_km2_in_grid`, in `[0, 1]`. */
+    max_density_ratio: number;
 }
 
 /** Matches `KeptBbox` (Bbox flattened with a `kept_at` timestamp). */

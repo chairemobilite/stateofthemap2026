@@ -1,19 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-import type { Bbox } from './api';
 import { SamplingPanel } from './SamplingPanel';
+import { makeBbox } from './test/fixtures';
 
-const BBOX: Bbox = {
-    id: 'abcd1234-0000-0000-0000-000000000001',
-    west: -73.6,
-    south: 45.5,
-    east: -73.5,
-    north: 45.6,
-    center: [-73.55, 45.55],
-    population: null,
-    filtered: false,
-};
+const BBOX = makeBbox();
 
 const noop = () => {};
 
@@ -33,6 +24,28 @@ describe('<SamplingPanel />', () => {
         expect(screen.getByText(/73\.5500° W/)).toBeInTheDocument();
         expect(screen.getByText('abcd1234')).toBeInTheDocument();
         expect(screen.getByText('3')).toBeInTheDocument();
+    });
+
+    it('renders the population, density and ratio against the densest cell', () => {
+        render(
+            <SamplingPanel
+                bbox={makeBbox({
+                    cell_size_km: 10,
+                    population: 12_500,
+                    density_per_km2: 125,
+                    max_density_ratio: 0.05,
+                })}
+                keptCount={0}
+                status="idle"
+                error={null}
+                onDecide={noop}
+                onSkip={noop}
+            />,
+        );
+        expect(screen.getByText('10 × 10 km')).toBeInTheDocument();
+        expect(screen.getByText('12,500')).toBeInTheDocument();
+        expect(screen.getByText('125 / km²')).toBeInTheDocument();
+        expect(screen.getByText('5.0%')).toBeInTheDocument();
     });
 
     it.each(['keep', 'reject'] as const)('fires onDecide(%s) when the matching button is clicked', (decision) => {

@@ -1,18 +1,9 @@
 import { describe, it, expect } from 'vitest';
 
-import type { Bbox } from './api';
 import { toBounds, toPolygon } from './bboxGeoJson';
+import { makeBbox } from './test/fixtures';
 
-const SAMPLE: Bbox = {
-    id: '00000000-0000-0000-0000-000000000001',
-    west: -73.6,
-    south: 45.5,
-    east: -73.5,
-    north: 45.6,
-    center: [-73.55, 45.55],
-    population: null,
-    filtered: false,
-};
+const SAMPLE = makeBbox({ id: '00000000-0000-0000-0000-000000000001' });
 
 describe('bbox geojson', () => {
     it('toPolygon returns a closed five-point ring starting at the SW corner', () => {

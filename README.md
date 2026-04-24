@@ -38,31 +38,26 @@ latexmk -pdf main.tex
 
 ## Entrance Analyser tool
 
-The tool generates random 10 × 10 km bounding boxes, optionally pre-filtered
-by population density (GHS-POP from the JRC), and displays them on a MapLibre
-map with togglable basemaps. The user keeps or rejects each candidate; kept
-bounding boxes are persisted to `entranceAnalyser/data/kept_bboxes.json`.
+The tool draws inhabited bounding boxes from a pre-computed GHS-POP
+grid (configurable cell size, 1–100 km, default 10), shows them on a
+MapLibre map with togglable basemaps, and persists kept candidates to
+`entranceAnalyser/data/kept_bboxes.json`. Each candidate is decorated
+with its total population, density per km², and density relative to
+the densest cell in the world.
 
 ### Quickstart
 
 Prerequisites: Rust stable (1.90+), Node.js 22+, Yarn 1.x.
 
 ```bash
-# Backend
 cd entranceAnalyser
-cargo check
-cargo test
-
-# Frontend
-cd frontend
-yarn install
-yarn build      # production build
-yarn dev        # local dev server
+cargo test                # 42 backend unit + 1 integration test
+cd frontend && yarn test  # 29 frontend tests
 ```
 
-The backend runs on `127.0.0.1:3000`, the frontend dev server on
-`127.0.0.1:5173` (Vite default). See `entranceAnalyser/README.md` (added in
-PR 2) for the full runbook.
+The runbook (downloading GHS-POP, building the grid, starting the
+backend + Vite dev server) lives in
+[`entranceAnalyser/README.md`](entranceAnalyser/README.md).
 
 ### Configuration
 

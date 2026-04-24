@@ -89,14 +89,22 @@ impl JsonStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bbox::bbox_from_center;
+    use crate::bbox::random_bbox;
+    use crate::grid::{Cell, GridFile};
+    use crate::sampler::Sampler;
     use chrono::Utc;
     use rstest::rstest;
     use tempfile::tempdir;
 
     fn sample_kept(lon: f64, lat: f64) -> KeptBbox {
+        let sampler = Sampler::new(GridFile::new(
+            10,
+            2020,
+            vec![Cell { lat: lat as f32, lon: lon as f32, pop: 1234.0 }],
+        ))
+        .unwrap();
         KeptBbox {
-            bbox: bbox_from_center(lon, lat),
+            bbox: random_bbox(&sampler),
             kept_at: Utc::now(),
         }
     }

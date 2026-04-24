@@ -1,17 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fetchKept, fetchRandomBbox, submitDecision, type Bbox, type KeptBbox } from './api';
+import { fetchKept, fetchRandomBbox, submitDecision, type KeptBbox } from './api';
+import { makeBbox } from './test/fixtures';
 
-const SAMPLE_BBOX: Bbox = {
-    id: '00000000-0000-0000-0000-000000000001',
-    west: -73.6,
-    south: 45.5,
-    east: -73.5,
-    north: 45.6,
-    center: [-73.55, 45.55],
-    population: null,
-    filtered: false,
-};
+const SAMPLE_BBOX = makeBbox({ id: '00000000-0000-0000-0000-000000000001' });
 
 /** Build a stub `fetch` that returns a single JSON response. */
 function jsonFetch(body: unknown, init: { status?: number; statusText?: string } = {}) {

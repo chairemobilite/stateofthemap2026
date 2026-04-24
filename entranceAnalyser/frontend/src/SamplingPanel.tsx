@@ -21,6 +21,17 @@ function formatCoord(value: number, axis: 'lat' | 'lon'): string {
     return `${Math.abs(value).toFixed(4)}° ${hemisphere}`;
 }
 
+/** Thousand-separator integer for human-readable populations. */
+const INT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+/** One-decimal float for densities (people / km²). */
+const DENSITY = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+/** Percent with one decimal for the ratio against the densest grid cell. */
+const PERCENT = new Intl.NumberFormat('en-US', {
+    style: 'percent',
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+});
+
 export function SamplingPanel({
     bbox,
     keptCount,
@@ -39,6 +50,16 @@ export function SamplingPanel({
                     <dd>
                         {formatCoord(bbox.center[1], 'lat')}, {formatCoord(bbox.center[0], 'lon')}
                     </dd>
+                    <dt>Size</dt>
+                    <dd>
+                        {bbox.cell_size_km} × {bbox.cell_size_km} km
+                    </dd>
+                    <dt>Population</dt>
+                    <dd>{INT.format(bbox.population)}</dd>
+                    <dt>Density</dt>
+                    <dd>{DENSITY.format(bbox.density_per_km2)} / km²</dd>
+                    <dt>vs. densest cell</dt>
+                    <dd>{PERCENT.format(bbox.max_density_ratio)}</dd>
                     <dt>ID</dt>
                     <dd>
                         <code>{bbox.id.slice(0, 8)}</code>
