@@ -94,12 +94,16 @@ replaces the existing rows in a single transaction.
 `--cell-size-km` is configurable from `1` (the source's native
 resolution) up to `100`. Common picks:
 
-| Cell size | Inhabited cells | Rows inserted |
-|-----------|-----------------|---------------|
-| 1 km      | ~15 M           | same          |
-| 5 km      | ~600 k          | same          |
-| 10 km     | ~150 k          | same          |
-| 25 km     | ~25 k           | same          |
+| Cell size | Inhabited cells     |
+|-----------|---------------------|
+| 1 km      | ~15 M (estimate)    |
+| 10 km     | ~808 k (measured)   |
+| 25 km     | ~200 k (estimate)   |
+
+Coarser grids don't shrink as N² because the `≥ min_population`
+(default 0.5) threshold drops many sparsely-populated 1 km cells that
+get rolled into still-inhabited 10 km ones. Only the 10 km row is a
+measured figure from the 2020 epoch; the others are back-of-envelope.
 
 `--min-population` defaults to `0.5` (drops empty / ocean cells).
 
