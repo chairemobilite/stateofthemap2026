@@ -20,7 +20,25 @@ export interface Bbox {
     density_per_km2: number;
     /** `density_per_km2 / max_density_per_km2_in_grid`, in `[0, 1]`. */
     max_density_ratio: number;
+    /** Total built volume (m³) inside the bbox, from GHS-BUILT-V. */
+    built_volume: number;
+    /** `built_volume / max_built_volume_in_grid`, in `[0, 1]`. */
+    max_built_volume_ratio: number;
 }
+
+/** Sampling strategies exposed by the backend. Matches the `StrategyName`
+ *  enum in `backend/src/api.rs`. */
+export type StrategyName = 'uniform' | 'population' | 'built' | 'blended';
+
+/** Client-side representation of a `/random?strategy=...&alpha=...` query. */
+export interface Strategy {
+    name: StrategyName;
+    /** Only consulted when `name === 'blended'`. Must be in [0, 1]. */
+    alpha: number;
+}
+
+/** Default strategy the UI opens with — mirrors the backend default. */
+export const DEFAULT_STRATEGY: Strategy = { name: 'blended', alpha: 0.5 };
 
 /** Matches `KeptBbox` (Bbox flattened with a `kept_at` timestamp). */
 export interface KeptBbox extends Bbox {
@@ -45,9 +63,22 @@ async function jsonOrThrow<T>(response: Response): Promise<T> {
     return response.json() as Promise<T>;
 }
 
-/** `GET /api/bbox/random` — fetch a fresh candidate bbox. */
-export async function fetchRandomBbox(fetchFn: typeof fetch = fetch): Promise<Bbox> {
-    return jsonOrThrow<Bbox>(await fetchFn(`${BASE}/random`));
+/**
+ * `GET /api/bbox/random?strategy=...&alpha=...` — fetch a fresh candidate
+ * bbox under the given sampling strategy. The `alpha` parameter is only
+ * emitted for `blended`; the backend rejects out-of-range alphas with
+ * 400, and built/blended surface 503 when the grid was built without
+ * GHS-BUILT-V.
+ */
+export async function fetchRandomBbox(
+    strategy: Strategy = DEFAULT_STRATEGY,
+    fetchFn: typeof fetch = fetch,
+): Promise<Bbox> {
+    const params = new URLSearchParams({ strategy: strategy.name });
+    if (strategy.name === 'blended') {
+        params.set('alpha', String(strategy.alpha));
+    }
+    return jsonOrThrow<Bbox>(await fetchFn(`${BASE}/random?${params}`));
 }
 
 /**
