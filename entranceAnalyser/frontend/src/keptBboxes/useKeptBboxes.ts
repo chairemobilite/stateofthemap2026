@@ -8,7 +8,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchKept, type KeptBbox } from '../api';
-import type { KeptBboxesStatus } from './KeptBboxesView';
+
+/** Fetch lifecycle for the kept-bboxes list; consumed by every component
+ *  that renders hook output (the map overlay, the former list view). */
+export type KeptBboxesStatus = 'loading' | 'idle' | 'error';
 
 export interface UseKeptBboxesOptions {
     /** Override the API module, mostly for tests. */

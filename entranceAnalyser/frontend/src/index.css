@@ -331,3 +331,43 @@ body {
     background: #fee2e2;
     color: #991b1b;
 }
+
+.kept-bboxes-map {
+    position: absolute;
+    inset: 0;
+}
+
+.kept-bboxes-map__canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.kept-bboxes-map__status,
+.kept-bboxes-map__error {
+    position: absolute;
+    top: 4.5rem;
+    left: 1rem;
+    z-index: 1;
+    margin: 0;
+    padding: 0.4rem 0.75rem;
+    background: rgba(255, 255, 255, 0.94);
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    font-size: 0.85rem;
+    color: #111;
+}
+
+.kept-bboxes-map__error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* MapLibre draws its own border/padding around popup contents; drop
+   the row's own border so the popup doesn't show a double outline. */
+.maplibregl-popup-content .kept-bbox-row {
+    border: 0;
+    padding: 0;
+    background: transparent;
+}

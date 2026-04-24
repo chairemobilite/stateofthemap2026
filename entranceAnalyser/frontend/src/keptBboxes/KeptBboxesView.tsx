@@ -6,8 +6,7 @@
 import type { KeptBbox } from '../api';
 
 import { KeptBboxRow } from './KeptBboxRow';
-
-export type KeptBboxesStatus = 'loading' | 'idle' | 'error';
+import type { KeptBboxesStatus } from './useKeptBboxes';
 
 export interface KeptBboxesViewProps {
     keptBboxes: KeptBbox[];
