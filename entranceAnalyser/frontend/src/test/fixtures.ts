@@ -1,7 +1,7 @@
 //! Shared test fixtures for the bbox shape so individual test files don't
 //! need to repeat (or drift on) the field list.
 
-import type { Bbox } from '../api';
+import type { Bbox, KeptBbox } from '../api';
 
 export function makeBbox(overrides: Partial<Bbox> = {}): Bbox {
     return {
@@ -18,5 +18,18 @@ export function makeBbox(overrides: Partial<Bbox> = {}): Bbox {
         built_volume: 500_000,
         max_built_volume_ratio: 0.25,
         ...overrides,
+    };
+}
+
+/**
+ * Kept-bbox fixture: reuses `makeBbox` and tacks on a `kept_at` timestamp,
+ * matching the shape `GET /api/bbox/kept` returns.
+ *
+ * @param overrides - Fields to override on the base fixture.
+ */
+export function makeKeptBbox(overrides: Partial<KeptBbox> = {}): KeptBbox {
+    return {
+        ...makeBbox(overrides),
+        kept_at: overrides.kept_at ?? '2026-04-23T12:00:00Z',
     };
 }

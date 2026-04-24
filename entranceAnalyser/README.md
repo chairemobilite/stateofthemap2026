@@ -20,7 +20,11 @@ backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
            src/sampler.rs                          uniform/population/built/blended draws
            src/storage.rs                          PgStore: kept_bboxes + analyses
            src/bin/build_grid.rs                   offline aggregation tool
-frontend/  React + Vite + MapLibre GL — keep/reject UI + strategy selector
+config/    Runtime config consumed by the analysis pipeline
+           poi_tags.yml                            POI tag groups (forthcoming runner)
+frontend/  React + Vite + MapLibre GL — two screens:
+           src/                                    Sampling screen (keep/reject + strategy)
+           src/keptBboxes/                         Kept-bboxes overview map + popup row
 ```
 
 The HTTP backend serves three endpoints:
@@ -191,6 +195,41 @@ yarn dev
 Open <http://127.0.0.1:5173>. The backend picks the most recently
 built `(cell_size_km, epoch)` from `grid_meta` at startup and samples
 from the matching `grid_cells` on every `/api/bbox/random` call.
+
+The UI has two screens, switched via the tab pair floating at the top
+of the viewport:
+
+| Screen         | What it does                                                                                                        |
+|----------------|---------------------------------------------------------------------------------------------------------------------|
+| `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
+| `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. |
+
+The `Kept bboxes` map uses a single GeoJSON source per geometry type
+(polygons for the rectangles, points for the low-zoom markers) so the
+visible layer swaps without reloading data. Clicking any feature opens
+a MapLibre popup whose body is a React-rendered `KeptBboxRow`
+(headline info + `Not started` progress pill). The full
+`ProgressStatus` union (`not_started` / `queued` / `running` / `done`
+/ `failed`) and its pill styles are defined up front in
+[`frontend/src/keptBboxes/progress.ts`](frontend/src/keptBboxes/progress.ts),
+so the forthcoming analysis runner can flip pills without touching
+any component that displays them.
+
+## Analysis pipeline config
+
+The analysis runner (not yet wired to the backend) is driven by a
+single checked-in YAML file at
+[`config/poi_tags.yml`](config/poi_tags.yml). Each entry under
+`groups` names a semantic category (e.g. `shops`) and lists the raw
+OSM tag expressions (`key=value`, with `*` as a wildcard) that
+belong to it. The runner will query Overpass per kept bbox, count
+features per group, and persist the result to the existing
+`analyses` table with `kind='poi_count'` and a JSONB payload of
+per-group counts.
+
+The file ships with one working example group and one
+commented-out `public_transport` scaffold; edit it in place as the
+paper's analysis plan grows.
 
 ## Tests
 

@@ -1,0 +1,23 @@
+# POI tag groups for the entrance-analysis pipeline.
+#
+# Each entry under `groups` names a semantic category and lists the raw OSM
+# tag expressions that belong to it. An expression is a `key=value` string;
+# `value` may be `*` to match any value for that key.
+#
+# The analysis runner (forthcoming PR) will query Overpass for every kept
+# bbox, count the features matching each group, and persist the result to
+# the `analyses` table with `kind='poi_count'` and
+# `payload = { <group>: <count>, ... }`.
+#
+# At least one group is required; add more as the paper's analysis plan
+# grows. Order is irrelevant.
+
+groups:
+    shops:
+        - shop=*
+
+    # Example shape for a second group -- uncomment and edit to enable.
+    # public_transport:
+    #     - highway=bus_stop
+    #     - railway=tram_stop
+    #     - public_transport=station
