@@ -1,0 +1,36 @@
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.pdf
+*.synctex.gz
+*.toc
+
+# Rust
+target/
+Cargo.lock.bak
+
+# Node / Vite
+node_modules/
+dist/
+*.log
+.vite/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Generated data (keep folder via .gitkeep)
+entranceAnalyser/data/*
+!entranceAnalyser/data/.gitkeep
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
