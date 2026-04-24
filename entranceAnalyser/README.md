@@ -2,35 +2,53 @@
 
 Sampling tool used to gather candidate sites for the OSM Science 2026
 analysis of building-entrance mapping. Pulls inhabited areas from a
-pre-computed GHS-POP grid, draws them on a MapLibre map with togglable
-basemaps, and persists the user's keep / reject decisions to a local
-JSON file.
+pre-computed GHS-POP grid stored in PostgreSQL, draws them on a
+MapLibre map with togglable basemaps, and persists the operator's keep
+/ reject decisions — along with downstream per-bbox analyses — in the
+same database.
 
 ## Architecture
 
 ```
-backend/   Rust (axum) — random sampling + atomic JSON store
-           src/grid.rs        on-disk grid format ("EAGD")
-           src/sampler.rs     uniform draw from the grid
-           src/bin/build_grid.rs   offline aggregation tool
+backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
+           migrations/0001_init.sql  schema (grid + kept_bboxes + analyses)
+           src/config.rs             PG_* env → database URL
+           src/db.rs                 pool factory + embedded migrator
+           src/sampler.rs            random draw from grid_cells
+           src/storage.rs            PgStore: kept_bboxes + analyses
+           src/bin/build_grid.rs     offline aggregation tool
 frontend/  React + Vite + MapLibre GL — keep/reject UI
-data/      gitignored — grid file + kept_bboxes.json
 ```
 
 The HTTP backend serves three endpoints:
 
 | Method | Path                  | Purpose                                                         |
 |--------|-----------------------|-----------------------------------------------------------------|
-| GET    | `/api/bbox/random`    | draw a candidate (503 if no grid is loaded)                     |
-| POST   | `/api/bbox/decision`  | keep or reject a previously drawn bbox                          |
+| GET    | `/api/bbox/random`    | draw a candidate (503 if `grid_meta` is empty)                  |
+| POST   | `/api/bbox/decision`  | keep or reject a previously drawn bbox (client echoes it back)  |
 | GET    | `/api/bbox/kept`      | list every persisted kept bbox                                  |
 
-## Bootstrapping the world grid
+## Bootstrapping
 
-The backend refuses to serve random bboxes until a `EAGD` grid file
-exists on disk. Building one is a one-shot, ~few-minute step.
+The backend refuses to serve random bboxes until the `grid_meta` /
+`grid_cells` tables have been filled in. The full one-shot is ~few
+minutes.
 
-### 1. Download the source raster
+### 1. Provision a Postgres database with PostGIS
+
+Any PostgreSQL 14+ install works as long as the `postgis` extension is
+available on the server. On macOS with Postgres.app or Homebrew:
+
+```bash
+createdb entrance_analyser        # matches $PG_DATABASE in .env
+createdb entrance_analyser_test   # matches $PG_DATABASE_TEST in .env
+```
+
+The backend enables the extension automatically on startup via the
+embedded `0001_init.sql` migration — you do **not** need to run
+`sqlx migrate run` by hand.
+
+### 2. Download the source raster
 
 [GHS-POP R2023A][ghs] — 2020 epoch, 1 km Mollweide (EPSG:54009),
 ~322 MB zipped:
@@ -47,34 +65,38 @@ You only need the `.tif`; the rest of the archive is metadata.
 > population grid multitemporal (1975–2030). European Commission, Joint
 > Research Centre (JRC). DOI: [10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE](https://doi.org/10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE)
 
-### 2. Aggregate into the grid file
+### 3. Aggregate into the grid tables
 
 ```bash
 cd entranceAnalyser
 cargo run --release --bin entrance-analyser-build-grid -- \
-    --input  /path/to/GHS_POP_E2020_GLOBE_R2023A_54009_1000_V1_0.tif \
-    --output data/world_grid_2020_10km.bin \
+    --input /path/to/GHS_POP_E2020_GLOBE_R2023A_54009_1000_V1_0.tif \
     --cell-size-km 10
 ```
 
+The binary reads `PG_CONNECTION_STRING_PREFIX + PG_DATABASE` from `.env`
+by default; pass `--database-url` to override. Writes are idempotent
+per `(cell_size_km, epoch)`: rebuilding with the same parameters
+replaces the existing rows in a single transaction.
+
 `--cell-size-km` is configurable from `1` (the source's native
-resolution; ~200 MB output) up to `100`. Common picks:
+resolution) up to `100`. Common picks:
 
-| Cell size | Cells (inhabited only) | File size |
-|-----------|------------------------|-----------|
-| 1 km      | ~15 M                  | ~180 MB   |
-| 5 km      | ~600 k                 | ~7 MB     |
-| 10 km     | ~150 k                 | ~2 MB     |
-| 25 km     | ~25 k                  | ~300 KB   |
+| Cell size | Inhabited cells | Rows inserted |
+|-----------|------------------|---------------|
+| 1 km      | ~15 M            | same          |
+| 5 km      | ~600 k           | same          |
+| 10 km     | ~800 k           | same          |
+| 25 km     | ~25 k            | same          |
 
-`--min-population` defaults to `0.5` (drop empty / ocean cells).
+`--min-population` defaults to `0.5` (drops empty / ocean cells).
 
-### 3. Run the app
+### 4. Run the app
 
 ```bash
 # In one terminal:
 cd entranceAnalyser
-cargo run --release
+cargo run --release --bin entrance-analyser-backend
 
 # In another:
 cd entranceAnalyser/frontend
@@ -82,17 +104,33 @@ yarn install
 yarn dev
 ```
 
-Open <http://127.0.0.1:5173>. The backend looks for the grid at
-`ENTRANCE_ANALYSER_GRID` (defaults to `data/world_grid_2020_10km.bin`),
-and writes kept bboxes to `ENTRANCE_ANALYSER_DATA` (defaults to
-`data/kept_bboxes.json`).
+Open <http://127.0.0.1:5173>. The backend picks the most recently
+built `(cell_size_km, epoch)` from `grid_meta` at startup and samples
+from the matching `grid_cells` on every `/api/bbox/random` call.
 
 ## Tests
 
+The integration suite spins up a disposable database named
+`${PG_DATABASE_TEST}_<uuid>` for each test, applies the embedded
+migrations, and drops it on teardown, so running `cargo test` twice in
+a row leaves the server clean:
+
 ```bash
 cd entranceAnalyser
-cargo test                 # 42 unit + 1 integration test
-cd frontend && yarn test   # 29 vitest
+cargo test                 # unit + integration, skips DB tests if offline
+cd frontend && yarn test
 ```
+
+Tests that need Postgres print `skipping db-backed test: ...` and
+return early when the server is unreachable, so the suite stays green
+on machines without a live database.
+
+## Sampling performance note
+
+`sample()` uses `ORDER BY random() LIMIT 1`, which is acceptable at our
+scale (single-operator dev tool, ~800 k rows at 10 km). If the grid
+ever grows or the workload becomes concurrent, swap in the
+`tsm_system_rows` extension and `TABLESAMPLE SYSTEM_ROWS(1)` — that's
+a one-query change in [`src/sampler.rs`](backend/src/sampler.rs).
 
 [ghs]: https://human-settlement.emergency.copernicus.eu/ghs_pop2023.php
