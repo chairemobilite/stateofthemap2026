@@ -23,21 +23,26 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::bbox::{Bbox, KeptBbox, random_bbox};
+use crate::sampler::Sampler;
 use crate::storage::JsonStore;
 
-/// Shared state: the in-memory pool of emitted (but not-yet-decided) bboxes
-/// and the JSON store handle.
+/// Shared state: the in-memory pool of emitted (but not-yet-decided) bboxes,
+/// the JSON store handle, and an optional GHS-POP sampler. When the sampler
+/// is absent (no grid file on disk yet) `/api/bbox/random` returns 503 with
+/// a clear error rather than silently falling back to uninhabited sampling.
 #[derive(Clone)]
 pub struct AppState {
     issued: Arc<Mutex<HashMap<Uuid, Bbox>>>,
     store: JsonStore,
+    sampler: Option<Arc<Sampler>>,
 }
 
 impl AppState {
-    pub fn new(store: JsonStore) -> Self {
+    pub fn new(store: JsonStore, sampler: Option<Sampler>) -> Self {
         Self {
             issued: Arc::new(Mutex::new(HashMap::new())),
             store,
+            sampler: sampler.map(Arc::new),
         }
     }
 }
@@ -51,14 +56,18 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn random_handler(State(state): State<AppState>) -> Json<Bbox> {
-    let bbox = random_bbox();
+async fn random_handler(State(state): State<AppState>) -> Result<Json<Bbox>, ApiError> {
+    let sampler = state.sampler.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no GHS-POP grid loaded; build one with `entrance-analyser-build-grid`".into(),
+    ))?;
+    let bbox = random_bbox(sampler);
     state
         .issued
         .lock()
         .expect("issued mutex poisoned")
         .insert(bbox.id, bbox.clone());
-    Json(bbox)
+    Ok(Json(bbox))
 }
 
 #[derive(Debug, Deserialize)]
