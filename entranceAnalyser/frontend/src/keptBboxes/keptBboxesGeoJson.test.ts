@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { makeKeptBbox } from '../test/fixtures';
+import { makeKeptBbox, makePoi } from '../test/fixtures';
 import {
     toCenterCollection,
     toCollectiveBounds,
+    toPoiCollection,
     toPolygonCollection,
 } from './keptBboxesGeoJson';
 
@@ -45,6 +46,34 @@ describe('toCenterCollection', () => {
         expect(fc.features[0].geometry).toEqual({ type: 'Point', coordinates: [-73.55, 45.55] });
         expect(fc.features[0].properties).toEqual({ id: 'a' });
         expect(fc.features[1].geometry).toEqual({ type: 'Point', coordinates: [2.35, 48.85] });
+    });
+});
+
+describe('toPoiCollection', () => {
+    it('returns an empty collection when no picks have resolved to features', () => {
+        expect(toPoiCollection({})).toEqual({ type: 'FeatureCollection', features: [] });
+        expect(toPoiCollection({ a: null })).toEqual({
+            type: 'FeatureCollection',
+            features: [],
+        });
+    });
+
+    it('emits one Point per non-null pick with bbox/osm metadata in properties', () => {
+        const fc = toPoiCollection({
+            a: makePoi({ osm_type: 'node', osm_id: 1, center: [1, 2], group: 'shops' }),
+            b: null,
+            c: makePoi({ osm_type: 'way', osm_id: 99, center: [10, 20], group: 'amenities' }),
+        });
+
+        expect(fc.features).toHaveLength(2);
+        expect(fc.features[0]).toMatchObject({
+            geometry: { type: 'Point', coordinates: [1, 2] },
+            properties: { bbox_id: 'a', osm_type: 'node', osm_id: 1, group: 'shops' },
+        });
+        expect(fc.features[1]).toMatchObject({
+            geometry: { type: 'Point', coordinates: [10, 20] },
+            properties: { bbox_id: 'c', osm_type: 'way', osm_id: 99, group: 'amenities' },
+        });
     });
 });
 
