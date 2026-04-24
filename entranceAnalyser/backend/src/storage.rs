@@ -13,8 +13,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use sqlx::PgPool;
 use sqlx::types::Json as SqlxJson;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::bbox::{Bbox, KeptBbox};

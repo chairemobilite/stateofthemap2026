@@ -14,16 +14,16 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
+    Json, Router,
 };
 use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::bbox::{Bbox, KeptBbox, random_bbox};
+use crate::bbox::{random_bbox, Bbox, KeptBbox};
 use crate::overpass::{OverpassClient, OverpassError, Poi};
 use crate::poi_config::PoiTagConfig;
 use crate::sampler::{SampleError, Sampler, Strategy};

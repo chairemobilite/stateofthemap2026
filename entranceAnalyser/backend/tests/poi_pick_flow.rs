@@ -25,7 +25,7 @@ use entrance_analyser_backend::{
     storage::PgStore,
 };
 use http_body_util::BodyExt;
-use serde_json::{Value as JsonValue, json};
+use serde_json::{json, Value as JsonValue};
 use tower::ServiceExt;
 use uuid::Uuid;
 use wiremock::matchers::method;
