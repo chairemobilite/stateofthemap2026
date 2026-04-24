@@ -1,7 +1,12 @@
 :root {
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     line-height: 1.5;
-    color-scheme: light dark;
+    /* Panels, popups and tab buttons are all hard-coded on light
+       backgrounds. Declaring `light dark` made the browser swap
+       unstyled text (`<dd>`, inactive tab buttons, `<code>`) to its
+       dark-mode default — white on white on dark-mode machines. */
+    color-scheme: light;
+    color: #111;
 }
 
 html,
