@@ -11,6 +11,8 @@ use tower_http::cors::CorsLayer;
 
 mod api;
 mod bbox;
+mod grid;
+mod mollweide;
 mod storage;
 
 /// Override the kept-bboxes file location. Defaults to `data/kept_bboxes.json`
