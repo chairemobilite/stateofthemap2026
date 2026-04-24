@@ -1,0 +1,116 @@
+import { describe, expect, it, vi } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+
+import type { PoiPickRecord } from '../api';
+import { makePoi } from '../test/fixtures';
+import { usePoiPicks } from './usePoiPicks';
+
+const ID_A = '00000000-0000-0000-0000-00000000000a';
+const ID_B = '00000000-0000-0000-0000-00000000000b';
+
+describe('usePoiPicks', () => {
+    it('starts loading and exposes an empty pick map', () => {
+        const fetchAll = vi.fn().mockImplementation(() => new Promise(() => {}));
+        const { result } = renderHook(() => usePoiPicks({ fetchAll }));
+        expect(result.current.status).toBe('loading');
+        expect(result.current.picks).toEqual({});
+        expect(result.current.picking.size).toBe(0);
+        expect(result.current.error).toBeNull();
+    });
+
+    it('hydrates picks from the bulk loader and transitions to idle', async () => {
+        const rows: PoiPickRecord[] = [
+            { bbox_id: ID_A, poi: makePoi({ osm_id: 1 }) },
+            { bbox_id: ID_B, poi: null },
+        ];
+        const fetchAll = vi.fn().mockResolvedValue(rows);
+        const { result } = renderHook(() => usePoiPicks({ fetchAll }));
+
+        await waitFor(() => expect(result.current.status).toBe('idle'));
+        expect(result.current.picks[ID_A]).toEqual(rows[0].poi);
+        expect(result.current.picks[ID_B]).toBeNull();
+        expect(fetchAll).toHaveBeenCalledOnce();
+    });
+
+    it('surfaces loader errors via status/error fields', async () => {
+        const fetchAll = vi.fn().mockRejectedValue(new Error('boom'));
+        const { result } = renderHook(() => usePoiPicks({ fetchAll }));
+        await waitFor(() => expect(result.current.status).toBe('error'));
+        expect(result.current.error).toBe('boom');
+    });
+
+    it('pick(id) marks the bbox as in-flight, then merges the response', async () => {
+        const fetchAll = vi.fn().mockResolvedValue([]);
+        let resolve!: (value: PoiPickRecord) => void;
+        const pickOne = vi.fn().mockImplementation(
+            () =>
+                new Promise<PoiPickRecord>((r) => {
+                    resolve = r;
+                }),
+        );
+
+        const { result } = renderHook(() => usePoiPicks({ fetchAll, pickOne }));
+        await waitFor(() => expect(result.current.status).toBe('idle'));
+
+        let pickPromise!: Promise<void>;
+        act(() => {
+            pickPromise = result.current.pick(ID_A);
+        });
+        // While in-flight, the bbox shows up in the picking set.
+        await waitFor(() => expect(result.current.picking.has(ID_A)).toBe(true));
+
+        const poi = makePoi({ osm_id: 99, group: 'shops' });
+        await act(async () => {
+            resolve({ bbox_id: ID_A, poi });
+            await pickPromise;
+        });
+
+        expect(result.current.picking.has(ID_A)).toBe(false);
+        expect(result.current.picks[ID_A]).toEqual(poi);
+        expect(pickOne).toHaveBeenCalledWith(ID_A);
+    });
+
+    it('pick(id) caches a null result when Overpass matched nothing', async () => {
+        const fetchAll = vi.fn().mockResolvedValue([]);
+        const pickOne = vi.fn().mockResolvedValue({ bbox_id: ID_A, poi: null });
+        const { result } = renderHook(() => usePoiPicks({ fetchAll, pickOne }));
+        await waitFor(() => expect(result.current.status).toBe('idle'));
+
+        await act(() => result.current.pick(ID_A));
+        // Property exists with explicit null — distinguishable from
+        // "haven't picked yet" (undefined).
+        expect(ID_A in result.current.picks).toBe(true);
+        expect(result.current.picks[ID_A]).toBeNull();
+    });
+
+    it('pick(id) surfaces backend errors but keeps prior picks intact', async () => {
+        const existing = makePoi({ osm_id: 5 });
+        const fetchAll = vi.fn().mockResolvedValue([{ bbox_id: ID_A, poi: existing }]);
+        const pickOne = vi.fn().mockRejectedValue(new Error('502 Bad Gateway: overpass: ...'));
+
+        const { result } = renderHook(() => usePoiPicks({ fetchAll, pickOne }));
+        await waitFor(() => expect(result.current.status).toBe('idle'));
+
+        await act(() => result.current.pick(ID_B));
+        expect(result.current.error).toMatch(/502 Bad Gateway/);
+        expect(result.current.picking.has(ID_B)).toBe(false);
+        // Previously-loaded pick must not be wiped by an unrelated error.
+        expect(result.current.picks[ID_A]).toEqual(existing);
+    });
+
+    it('reload() re-fetches and replaces the pick map', async () => {
+        const first: PoiPickRecord[] = [{ bbox_id: ID_A, poi: makePoi() }];
+        const second: PoiPickRecord[] = [
+            { bbox_id: ID_A, poi: makePoi({ osm_id: 2 }) },
+            { bbox_id: ID_B, poi: null },
+        ];
+        const fetchAll = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+        const { result } = renderHook(() => usePoiPicks({ fetchAll }));
+        await waitFor(() => expect(result.current.picks[ID_A]?.osm_id).toBe(1234));
+
+        await act(() => result.current.reload());
+        expect(result.current.picks[ID_A]?.osm_id).toBe(2);
+        expect(ID_B in result.current.picks).toBe(true);
+        expect(fetchAll).toHaveBeenCalledTimes(2);
+    });
+});
