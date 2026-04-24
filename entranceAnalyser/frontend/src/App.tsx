@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 import { BasemapToggle } from './BasemapToggle';
 import { BASEMAPS, DEFAULT_BASEMAP_ID, type BasemapId } from './basemaps';
-import { KeptBboxesView } from './keptBboxes/KeptBboxesView';
+import { KeptBboxesMap } from './keptBboxes/KeptBboxesMap';
 import { useKeptBboxes } from './keptBboxes/useKeptBboxes';
 import { MapView } from './MapView';
 import { SamplingPanel } from './SamplingPanel';
@@ -55,11 +55,19 @@ function App() {
                     />
                 </>
             ) : (
-                <KeptBboxesView
-                    keptBboxes={kept.keptBboxes}
-                    status={kept.status}
-                    error={kept.error}
-                />
+                <>
+                    <KeptBboxesMap
+                        keptBboxes={kept.keptBboxes}
+                        basemapId={basemapId}
+                        status={kept.status}
+                        error={kept.error}
+                    />
+                    <BasemapToggle
+                        basemaps={BASEMAPS}
+                        activeId={basemapId}
+                        onChange={setBasemapId}
+                    />
+                </>
             )}
         </div>
     );
