@@ -4,20 +4,216 @@
 # tag expressions that belong to it. An expression is a `key=value` string;
 # `value` may be `*` to match any value for that key.
 #
+# Criterion: features people would name as a destination in itself (a place
+# you “go to”), not viewpoints, trail ancillaries, curbside furniture, or
+# anonymous farm/industrial shells. Wildcards (`tourism=*`, `leisure=*`, …)
+# rely on `exceptions` to drop simple cases.
+#
 # The analysis runner (forthcoming PR) will query Overpass for every kept
 # bbox, count the features matching each group, and persist the result to
 # the `analyses` table with `kind='poi_count'` and
 # `payload = { <group>: <count>, ... }`.
 #
 # At least one group is required; add more as the paper's analysis plan
-# grows. Order is irrelevant.
+# grows. Order does not change Overpass results, but it **does** affect which
+# `group` label wins when a feature matches several groups (first match wins).
+#
+# Cross-walk: https://wiki.openstreetmap.org/wiki/Map_features (primary features
+# sections § Amenity, Shop, Craft, Emergency, Healthcare, Highway, Historic,
+# Leisure, Office, Landuse, Man made, Public transport, Railway — plus
+# Key:tourism which backs § Tourism). `buildings`: same page § Building;
+# omitted residential-only
+# typologies, `construction`, `roof`; no `building=yes` (too broad).
+#
+# Group order matters once the runner resolves `group_for_tags`: more specific
+# keys (amenity, tourism, …) are listed before `buildings` so a museum tagged
+# `tourism=museum` + `building=museum` counts as tourism, not shell type alone.
 
 groups:
     shops:
         - shop=*
+    amenities:
+        - amenity=*
+    crafts:
+        - craft=*
+    tourism:
+        - tourism=*
+    leisure:
+        - leisure=*
+    office:
+        - office=*
+    healthcare:
+        - healthcare=*
+    historic:
+        - historic=*
+    emergency:
+        - emergency=ambulance_station
+    # Rail station destinations (incl. halts). No bus_stop, tram_stop,
+    # platforms, stop_position, or subway_entrance (access feature, not the venue).
+    transit:
+        - public_transport=station
+        - railway=halt
+        - railway=station
+    landuse_destinations:
+        - landuse=cemetery
+        - landuse=education
+        - landuse=fairground
+        - landuse=recreation_ground
+        - landuse=religious
+    highway:
+        - highway=rest_area
+    # Key:man_made — allowlist only (Map Features § Man made). Substantial
+    # destinations / workplaces only; omitted utility infra plus small markers
+    # (cairn, cross, maypole, …) that are not “a place you go to” on their own.
+    man_made:
+        - man_made=adit
+        - man_made=beehive
+        - man_made=courtyard
+        - man_made=dovecote
+        - man_made=hongsalmun
+        - man_made=iljumun
+        - man_made=kiln
+        - man_made=lighthouse
+        - man_made=mineshaft
+        - man_made=observatory
+        - man_made=obelisk
+        - man_made=paifang
+        - man_made=pier
+        - man_made=quay
+        - man_made=stupa
+        - man_made=telescope
+        - man_made=torii
+        - man_made=tower
+        - man_made=water_well
+        - man_made=watermill
+        - man_made=windmill
+        - man_made=windpump
+        - man_made=works
+    buildings:
+        - building=bakehouse
+        - building=barn
+        - building=barracks
+        - building=castle
+        - building=cathedral
+        - building=chapel
+        - building=church
+        - building=civic
+        - building=clock_tower
+        - building=college
+        - building=commercial
+        - building=conservatory
+        - building=fire_station
+        - building=government
+        - building=grandstand
+        - building=greenhouse
+        - building=hangar
+        - building=hospital
+        - building=hotel
+        - building=industrial
+        - building=kindergarten
+        - building=kingdom_hall
+        - building=kiosk
+        - building=library
+        - building=military
+        - building=monastery
+        - building=mosque
+        - building=museum
+        - building=office
+        - building=pagoda
+        - building=pavilion
+        - building=public
+        - building=religious
+        - building=retail
+        - building=riding_hall
+        - building=ruins
+        - building=school
+        - building=ship
+        - building=shrine
+        - building=sports_centre
+        - building=sports_hall
+        - building=stadium
+        - building=supermarket
+        - building=synagogue
+        - building=temple
+        - building=tower
+        - building=train_station
+        - building=transportation
+        - building=triumphal_arch
+        - building=university
+        - building=warehouse
+        - building=water_tower
+        - building=windmill
 
-    # Example shape for a second group -- uncomment and edit to enable.
-    # public_transport:
-    #     - highway=bus_stop
-    #     - railway=tram_stop
-    #     - public_transport=station
+# Features matching any `groups` entry but also matching an expression
+# below should be treated as non-POIs (e.g. `amenity=*` minus street
+# furniture). Same `key=value` syntax as groups.
+#
+# Applied by `PoiTagConfig::group_for_tags`: when an exception matches,
+# the helper returns `None` so the picker drops the feature before
+# random selection (and the future `poi_count` runner will skip it
+# without incrementing any group).
+#
+# Rationale: drop curbside / micro / marker features and things that are not
+# “destinations in themselves” (viewpoints, a tent pitch inside a campsite,
+# outdoor gym stations, wayside shrines, etc.). `tourism=yes` / `shop=yes` /
+# `shop=no` as above. Still NOT excluded: toilets, atm, parcel_locker,
+# public_bookcase, parking lots, kneipp water cure, fountain, `tourism=museum`,
+# etc.
+exceptions:
+    - amenity=bbq
+    - amenity=bench
+    - amenity=bicycle_parking
+    - amenity=bicycle_repair_station
+    - amenity=bicycle_wash
+    - amenity=check_in
+    - amenity=clock
+    - amenity=compressed_air
+    - amenity=dog_toilet
+    - amenity=drinking_water
+    - amenity=dressing_room
+    - amenity=grit_bin
+    - amenity=hunting_stand
+    - amenity=hydrant
+    - amenity=lounger
+    - amenity=mailroom
+    - amenity=motorcycle_parking
+    - amenity=parking_entrance
+    - amenity=parking_space
+    - amenity=payment_terminal
+    - amenity=photo_booth
+    - amenity=picnic_table
+    - amenity=post_box
+    - amenity=recycling
+    - amenity=sanitary_dump_station
+    - amenity=shelter
+    - amenity=shower
+    - amenity=stage
+    - amenity=taxi
+    - amenity=telephone
+    - amenity=vending_machine
+    - amenity=waste_basket
+    - amenity=waste_disposal
+    - amenity=waste_transfer_station
+    - amenity=water_point
+    - amenity=watering_place
+    - amenity=weighbridge
+    - historic=boundary_stone
+    - historic=highwater_mark
+    - historic=milestone
+    - historic=wayside_cross
+    - historic=wayside_shrine
+    - leisure=bird_hide
+    - leisure=common
+    - leisure=firepit
+    - leisure=fitness_station
+    - leisure=paddling_pool
+    - leisure=picnic_table
+    - leisure=slipway
+    - leisure=swimming_area
+    - shop=no
+    - shop=vacant
+    - shop=yes
+    - tourism=camp_pitch
+    - tourism=trail_riding_station
+    - tourism=viewpoint
+    - tourism=yes
