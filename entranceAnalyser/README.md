@@ -142,6 +142,18 @@ samplers into the middle of the Pacific. See
 [`backend/src/geotiff_pop.rs`](backend/src/geotiff_pop.rs) →
 `decoding_to_f32` for the filter.
 
+**LZW-compressed inputs are auto-transcoded.** The `tiff = 0.11`
+crate's LZW decoder dies mid-raster on strips without an explicit
+end-of-information code (GHS-BUILT-V ships exactly that way). To
+avoid forking `weezl`, `build-grid` detects LZW compression from
+the TIFF header and shells out to `gdal_translate -co COMPRESS=NONE`
+to produce a cached sibling at
+`<original>.uncompressed.tif`. Subsequent runs reuse the sibling
+(mtime-checked), so you pay the ~30 s re-encode cost once per
+raster. Requires `gdal_translate` on `$PATH` — install GDAL
+(`brew install gdal` / `apt-get install gdal-bin`) if the command
+fails with `gdal_translate not found`.
+
 The binary reads `PG_CONNECTION_STRING_PREFIX + PG_DATABASE` from `.env`
 by default; pass `--database-url` to override. Writes are idempotent
 per `(cell_size_km, epoch)`: rebuilding with the same parameters

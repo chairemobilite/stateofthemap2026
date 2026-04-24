@@ -29,6 +29,7 @@ use entrance_analyser_backend::aggregate::Aggregator;
 use entrance_analyser_backend::config::{self, DbKind};
 use entrance_analyser_backend::db;
 use entrance_analyser_backend::geotiff_pop::{GeoTransform, PopReader};
+use entrance_analyser_backend::lzw_transcode;
 use entrance_analyser_backend::mollweide;
 use sqlx::PgPool;
 
@@ -204,7 +205,12 @@ fn aggregate_one(
     cell_size_km: u32,
     label: &str,
 ) -> Result<AggregatedRaster, Box<dyn std::error::Error>> {
-    let mut reader = PopReader::open(path)?;
+    // Guard against the `tiff` crate's LZW decoder: if the source is
+    // LZW-compressed, transparently transcode to a cached uncompressed
+    // sibling (via `gdal_translate`) and read that instead. See
+    // `lzw_transcode` for the "why".
+    let readable = lzw_transcode::ensure_tiff_crate_readable(path)?;
+    let mut reader = PopReader::open(&readable)?;
     println!(
         "[{label}] source: {} × {} px @ {:.3} km/px (Mollweide)",
         reader.width, reader.height, reader.native_pixel_km(),
