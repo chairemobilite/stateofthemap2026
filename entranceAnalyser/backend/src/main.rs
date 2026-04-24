@@ -7,13 +7,8 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use entrance_analyser_backend::{api, storage};
 use tower_http::cors::CorsLayer;
-
-mod api;
-mod bbox;
-mod grid;
-mod mollweide;
-mod storage;
 
 /// Override the kept-bboxes file location. Defaults to `data/kept_bboxes.json`
 /// relative to the current working directory.
