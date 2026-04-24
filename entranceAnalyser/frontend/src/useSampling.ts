@@ -22,7 +22,7 @@ export interface SamplingState {
 export interface UseSamplingOptions {
     /** Override the API module, mostly for tests. */
     fetchNext?: () => Promise<Bbox>;
-    submit?: (id: string, decision: Decision) => Promise<{ total_kept: number }>;
+    submit?: (bbox: Bbox, decision: Decision) => Promise<{ total_kept: number }>;
 }
 
 /**
@@ -43,7 +43,7 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
     const submit = useMemo(
         () =>
             options.submit ??
-            ((id: string, decision: Decision) => submitDecision(id, decision)),
+            ((bbox: Bbox, decision: Decision) => submitDecision(bbox, decision)),
         [options.submit],
     );
 
@@ -73,7 +73,7 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
             setStatus('loading');
             setError(null);
             try {
-                const reply = await submit(bbox.id, decision);
+                const reply = await submit(bbox, decision);
                 setKeptCount(reply.total_kept);
                 await loadNext();
             } catch (err) {

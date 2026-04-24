@@ -26,13 +26,13 @@ describe('api client', () => {
 
     it.each(['keep', 'reject'] as const)('submitDecision posts %s as JSON and parses the reply', async (decision) => {
         const fetchFn = jsonFetch({ ok: true, total_kept: 7 });
-        const reply = await submitDecision(SAMPLE_BBOX.id, decision, fetchFn);
+        const reply = await submitDecision(SAMPLE_BBOX, decision, fetchFn);
 
         expect(fetchFn).toHaveBeenCalledTimes(1);
         const [url, init] = fetchFn.mock.calls[0];
         expect(url).toBe('/api/bbox/decision');
         expect(init.method).toBe('POST');
-        expect(JSON.parse(init.body)).toEqual({ id: SAMPLE_BBOX.id, decision });
+        expect(JSON.parse(init.body)).toEqual({ bbox: SAMPLE_BBOX, decision });
 
         expect(reply).toEqual({ ok: true, total_kept: 7 });
     });

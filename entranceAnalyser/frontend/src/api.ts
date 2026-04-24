@@ -31,6 +31,7 @@ export type Decision = 'keep' | 'reject';
 
 export interface DecisionResponse {
     ok: boolean;
+    /** Total number of kept bboxes after this decision, from `SELECT COUNT(*)`. */
     total_kept: number;
 }
 
@@ -49,16 +50,22 @@ export async function fetchRandomBbox(fetchFn: typeof fetch = fetch): Promise<Bb
     return jsonOrThrow<Bbox>(await fetchFn(`${BASE}/random`));
 }
 
-/** `POST /api/bbox/decision` — keep or reject an emitted bbox by id. */
+/**
+ * `POST /api/bbox/decision` — keep or reject an emitted bbox.
+ *
+ * The full bbox is echoed back to the backend (instead of just the id)
+ * so the server can persist it in a single round-trip without holding
+ * any per-session state.
+ */
 export async function submitDecision(
-    id: string,
+    bbox: Bbox,
     decision: Decision,
     fetchFn: typeof fetch = fetch,
 ): Promise<DecisionResponse> {
     const response = await fetchFn(`${BASE}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, decision }),
+        body: JSON.stringify({ bbox, decision }),
     });
     return jsonOrThrow<DecisionResponse>(response);
 }

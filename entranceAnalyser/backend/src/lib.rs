@@ -9,7 +9,6 @@ pub mod bbox;
 pub mod config;
 pub mod db;
 pub mod geotiff_pop;
-pub mod grid;
 pub mod mollweide;
 pub mod sampler;
 pub mod storage;

@@ -1,62 +1,49 @@
 //! Entrance Analyser backend — dev-only HTTP server.
 //!
-//! Binds on `127.0.0.1:3000` and exposes the `/api/bbox/*` routes defined
-//! in [`api`]. CORS is permissive because the server is only ever run
-//! alongside the Vite dev server on the same developer machine.
+//! Binds on `127.0.0.1:3000`, connects to Postgres, applies any pending
+//! migrations, and exposes the `/api/bbox/*` routes defined in [`api`].
+//! CORS is permissive because the server is only ever run alongside the
+//! Vite dev server on the same developer machine.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 
-use entrance_analyser_backend::{api, sampler::Sampler, storage};
+use entrance_analyser_backend::{
+    api,
+    config::{self, DbKind},
+    db,
+    sampler::Sampler,
+    storage::PgStore,
+};
 use tower_http::cors::CorsLayer;
 
-/// Override the kept-bboxes file location. Defaults to `data/kept_bboxes.json`
-/// relative to the current working directory.
-const DATA_PATH_ENV: &str = "ENTRANCE_ANALYSER_DATA";
-
-/// Override the GHS-POP grid file location. Defaults to
-/// `data/world_grid_2020_10km.bin`. If the file does not exist the server
-/// still starts; `/api/bbox/random` then returns 503 with a hint.
-const GRID_PATH_ENV: &str = "ENTRANCE_ANALYSER_GRID";
-
 #[tokio::main]
-async fn main() {
-    let data_path = std::env::var(DATA_PATH_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("data/kept_bboxes.json"));
-    let grid_path = std::env::var(GRID_PATH_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("data/world_grid_2020_10km.bin"));
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    config::load_dotenv();
+    let database_url = config::database_url(DbKind::App)?;
 
-    let sampler = match Sampler::from_path(&grid_path) {
-        Ok(s) => {
-            println!(
-                "loaded {} cells of {} × {} km from {} (max density: {:.0}/km²)",
-                s.cell_count(), s.cell_size_km(), s.cell_size_km(),
-                grid_path.display(), s.max_density_per_km2(),
-            );
-            Some(s)
-        }
-        Err(err) => {
-            eprintln!(
-                "warning: no usable grid at {} ({err}); /api/bbox/random will return 503 \
-                 until you run `entrance-analyser-build-grid`",
-                grid_path.display(),
-            );
-            None
-        }
-    };
+    let pool = db::connect(&database_url).await?;
+    db::run_migrations(&pool).await?;
 
-    let state = api::AppState::new(storage::JsonStore::new(&data_path), sampler);
+    let sampler = Sampler::from_latest(pool.clone()).await?;
+    match &sampler {
+        Some(s) => println!(
+            "sampling from grid_meta: cell_size_km={}, epoch={}, max density = {:.0}/km²",
+            s.cell_size_km(), s.epoch(), s.max_density_per_km2(),
+        ),
+        None => eprintln!(
+            "warning: no grid found; /api/bbox/random will return 503 \
+             until you run `entrance-analyser-build-grid`",
+        ),
+    }
+
+    let state = api::AppState::new(PgStore::new(pool), sampler);
     let app = api::router(state).layer(CorsLayer::permissive());
 
     let addr: SocketAddr = "127.0.0.1:3000".parse().expect("valid socket addr");
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("port 3000 is free");
-
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     println!("entrance-analyser-backend listening on http://{addr}");
-    println!("kept bboxes will be written to {}", data_path.display());
+    println!("kept bboxes and analyses are persisted to {database_url}");
 
-    axum::serve(listener, app).await.expect("server error");
+    axum::serve(listener, app).await?;
+    Ok(())
 }

@@ -3,14 +3,11 @@
 //! Three endpoints:
 //! - `GET  /api/bbox/random`   → emit a fresh candidate bbox
 //! - `POST /api/bbox/decision` → keep or reject a previously emitted bbox
-//! - `GET  /api/bbox/kept`     → list all kept bboxes
+//! - `GET  /api/bbox/kept`     → list every kept bbox
 //!
-//! The server remembers in-memory every bbox it has emitted (full object,
-//! not just the id) so that `/decision` can persist it without the client
-//! having to round-trip the coordinates.
-
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+//! The server is stateless between requests: the client echoes the
+//! full bbox back on decision, which lets us persist it in a single
+//! round-trip and keeps horizontal scaling trivial.
 
 use axum::{
     Json, Router,
@@ -18,32 +15,23 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::bbox::{Bbox, KeptBbox, random_bbox};
 use crate::sampler::Sampler;
-use crate::storage::JsonStore;
+use crate::storage::PgStore;
 
-/// Shared state: the in-memory pool of emitted (but not-yet-decided) bboxes,
-/// the JSON store handle, and an optional GHS-POP sampler. When the sampler
-/// is absent (no grid file on disk yet) `/api/bbox/random` returns 503 with
-/// a clear error rather than silently falling back to uninhabited sampling.
+/// Shared state: the sampler (optional when no grid has been built yet)
+/// and the kept-bboxes Postgres store.
 #[derive(Clone)]
 pub struct AppState {
-    issued: Arc<Mutex<HashMap<Uuid, Bbox>>>,
-    store: JsonStore,
-    sampler: Option<Arc<Sampler>>,
+    sampler: Option<Sampler>,
+    store: PgStore,
 }
 
 impl AppState {
-    pub fn new(store: JsonStore, sampler: Option<Sampler>) -> Self {
-        Self {
-            issued: Arc::new(Mutex::new(HashMap::new())),
-            store,
-            sampler: sampler.map(Arc::new),
-        }
+    pub fn new(store: PgStore, sampler: Option<Sampler>) -> Self {
+        Self { sampler, store }
     }
 }
 
@@ -59,20 +47,17 @@ pub fn router(state: AppState) -> Router {
 async fn random_handler(State(state): State<AppState>) -> Result<Json<Bbox>, ApiError> {
     let sampler = state.sampler.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
-        "no GHS-POP grid loaded; build one with `entrance-analyser-build-grid`".into(),
+        "no GHS-POP grid loaded; run `entrance-analyser-build-grid` first".into(),
     ))?;
-    let bbox = random_bbox(sampler);
-    state
-        .issued
-        .lock()
-        .expect("issued mutex poisoned")
-        .insert(bbox.id, bbox.clone());
+    let bbox = random_bbox(sampler).await.map_err(internal)?;
     Ok(Json(bbox))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DecisionRequest {
-    pub id: Uuid,
+    /// Full bbox as emitted by `/random`. The client echoes it back so
+    /// the server never has to keep per-session state in memory.
+    pub bbox: Bbox,
     pub decision: Decision,
 }
 
@@ -86,7 +71,7 @@ pub enum Decision {
 #[derive(Debug, Serialize)]
 pub struct DecisionResponse {
     pub ok: bool,
-    pub total_kept: usize,
+    pub total_kept: i64,
 }
 
 type ApiError = (StatusCode, String);
@@ -95,33 +80,11 @@ async fn decision_handler(
     State(state): State<AppState>,
     Json(req): Json<DecisionRequest>,
 ) -> Result<Json<DecisionResponse>, ApiError> {
-    // Drop the bbox from the issued map regardless of the decision so the
-    // id can't be replayed.
-    let bbox = state
-        .issued
-        .lock()
-        .expect("issued mutex poisoned")
-        .remove(&req.id)
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            format!("unknown or already-decided bbox id: {}", req.id),
-        ))?;
-
     let total_kept = match req.decision {
-        Decision::Keep => state
-            .store
-            .append(KeptBbox {
-                bbox,
-                kept_at: Utc::now(),
-            })
-            .map_err(internal)?,
-        Decision::Reject => state.store.load().map_err(internal)?.kept_bboxes.len(),
+        Decision::Keep => state.store.append(req.bbox).await.map_err(internal)?,
+        Decision::Reject => state.store.count().await.map_err(internal)?,
     };
-
-    Ok(Json(DecisionResponse {
-        ok: true,
-        total_kept,
-    }))
+    Ok(Json(DecisionResponse { ok: true, total_kept }))
 }
 
 #[derive(Debug, Serialize)]
@@ -130,10 +93,8 @@ pub struct KeptResponse {
 }
 
 async fn kept_handler(State(state): State<AppState>) -> Result<Json<KeptResponse>, ApiError> {
-    let file = state.store.load().map_err(internal)?;
-    Ok(Json(KeptResponse {
-        kept: file.kept_bboxes,
-    }))
+    let kept = state.store.load().await.map_err(internal)?;
+    Ok(Json(KeptResponse { kept }))
 }
 
 fn internal(err: impl std::fmt::Display) -> ApiError {

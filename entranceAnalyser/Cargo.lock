@@ -509,6 +509,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "geo",
+ "http-body-util",
  "rand 0.10.1",
  "rstest",
  "serde",
@@ -517,6 +518,7 @@ dependencies = [
  "tempfile",
  "tiff",
  "tokio",
+ "tower",
  "tower-http",
  "uuid",
 ]

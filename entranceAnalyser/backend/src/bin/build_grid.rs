@@ -123,7 +123,7 @@ fn aggregate(args: &Args) -> Result<Vec<Cell>, Box<dyn std::error::Error>> {
             args.cell_size_km, native_km,
         ).into());
     }
-    if args.cell_size_km % native_km != 0 {
+    if !args.cell_size_km.is_multiple_of(native_km) {
         return Err(format!(
             "--cell-size-km ({}) must be a multiple of the native resolution ({} km)",
             args.cell_size_km, native_km,

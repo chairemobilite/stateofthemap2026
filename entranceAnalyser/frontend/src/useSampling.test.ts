@@ -39,7 +39,7 @@ describe('useSampling', () => {
 
         await act(() => result.current.decide(decision));
 
-        expect(submit).toHaveBeenCalledExactlyOnceWith(first.id, decision);
+        expect(submit).toHaveBeenCalledExactlyOnceWith(first, decision);
         expect(result.current.bbox).toEqual(second);
         expect(result.current.keptCount).toBe(decision === 'keep' ? 1 : 0);
         expect(result.current.status).toBe('idle');
