@@ -19,21 +19,25 @@ backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
            src/db.rs                               pool factory + embedded migrator
            src/sampler.rs                          uniform/population/built/blended draws
            src/storage.rs                          PgStore: kept_bboxes + analyses
+           src/poi_config.rs                       poi_tags.yml loader (groups + exceptions)
+           src/overpass.rs                         Overpass QL client + result decoder
            src/bin/build_grid.rs                   offline aggregation tool
 config/    Runtime config consumed by the analysis pipeline
-           poi_tags.yml                            POI tag groups (forthcoming runner)
+           poi_tags.yml                            POI tag groups + exceptions
 frontend/  React + Vite + MapLibre GL — two screens:
            src/                                    Sampling screen (keep/reject + strategy)
-           src/keptBboxes/                         Kept-bboxes overview map + popup row
+           src/keptBboxes/                         Kept-bboxes overview map + popup row + POI picker
 ```
 
-The HTTP backend serves three endpoints:
+The HTTP backend serves these endpoints:
 
 | Method | Path                                        | Purpose                                                          |
 |--------|---------------------------------------------|------------------------------------------------------------------|
 | GET    | `/api/bbox/random?strategy=…&alpha=…`       | draw a candidate under the given strategy (see below)            |
 | POST   | `/api/bbox/decision`                        | keep or reject a previously drawn bbox (client echoes it back)   |
 | GET    | `/api/bbox/kept`                            | list every persisted kept bbox                                   |
+| POST   | `/api/bbox/kept/:id/poi_pick`               | pick (and cache) one POI inside a kept bbox via Overpass         |
+| GET    | `/api/analyses/poi_picks`                   | list every cached POI pick, in insertion order                   |
 
 ### Sampling strategies
 
@@ -202,7 +206,7 @@ of the viewport:
 | Screen         | What it does                                                                                                        |
 |----------------|---------------------------------------------------------------------------------------------------------------------|
 | `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
-| `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. |
+| `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. The popup hosts a **Pick POI** button that runs the Overpass picker on demand; picked features paint as orange dots. |
 
 The `Kept bboxes` map uses a single GeoJSON source per geometry type
 (polygons for the rectangles, points for the low-zoom markers) so the
@@ -215,21 +219,33 @@ a MapLibre popup whose body is a React-rendered `KeptBboxRow`
 so the forthcoming analysis runner can flip pills without touching
 any component that displays them.
 
-## Analysis pipeline config
+## POI picker
 
-The analysis runner (not yet wired to the backend) is driven by a
-single checked-in YAML file at
-[`config/poi_tags.yml`](config/poi_tags.yml). Each entry under
-`groups` names a semantic category (e.g. `shops`) and lists the raw
-OSM tag expressions (`key=value`, with `*` as a wildcard) that
-belong to it. The runner will query Overpass per kept bbox, count
-features per group, and persist the result to the existing
-`analyses` table with `kind='poi_count'` and a JSONB payload of
-per-group counts.
+The kept-bboxes view exposes a per-cell **Pick POI** action that
+queries Overpass for every feature matching
+[`config/poi_tags.yml`](config/poi_tags.yml), drops anything
+matched by an `exceptions` rule, and selects exactly one feature
+uniformly at random across all surviving groups. The picked POI
+(or `null` when the cell is genuinely empty) is cached in the
+`analyses` table with `kind='poi_pick'` so subsequent calls
+short-circuit without re-querying Overpass.
 
-The file ships with one working example group and one
-commented-out `public_transport` scaffold; edit it in place as the
-paper's analysis plan grows.
+`config/poi_tags.yml` has two top-level keys:
+
+- `groups` — named semantic categories (`shops`, `amenities`, …)
+  whose values are lists of OSM tag expressions (`key=value`, with
+  `*` as a wildcard).
+- `exceptions` — OSM tag expressions that disqualify a feature
+  even when it would otherwise match a group (e.g.
+  `amenity=parking`, `building=garage`). Applied after group
+  matching so a bakery tagged with one of the excluded sub-keys is
+  filtered out at query time.
+
+The Overpass endpoint is configurable via the `OVERPASS_URL`
+environment variable; it defaults to the public
+`https://overpass-api.de/api/interpreter` when unset. Operators
+running heavy batches should point this at a self-hosted mirror or
+a community alternate.
 
 ## Tests
 
