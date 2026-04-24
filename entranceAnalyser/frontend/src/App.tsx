@@ -1,12 +1,17 @@
+import { useState } from 'react';
+
+import { BasemapToggle } from './BasemapToggle';
+import { BASEMAPS, DEFAULT_BASEMAP_ID, type BasemapId } from './basemaps';
+import { MapView } from './MapView';
+
 function App() {
+    const [basemapId, setBasemapId] = useState<BasemapId>(DEFAULT_BASEMAP_ID);
+
     return (
-        <main>
-            <h1>Entrance Analyser</h1>
-            <p>
-                Frontend scaffold — the map view, basemap toggle, and the
-                keep/reject workflow land in the next PRs.
-            </p>
-        </main>
+        <div className="app">
+            <MapView basemapId={basemapId} />
+            <BasemapToggle basemaps={BASEMAPS} activeId={basemapId} onChange={setBasemapId} />
+        </div>
     );
 }
 
