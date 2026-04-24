@@ -327,9 +327,15 @@ body {
 }
 
 /* MapLibre draws its own border/padding around popup contents; drop
-   the row's own border so the popup doesn't show a double outline. */
+   the row's own border so the popup doesn't show a double outline.
+   `.maplibregl-popup` is `display: flex` with the content as a flex
+   item, so the container shrinks to fit-content; that collapses the
+   row's `grid-template-columns: max-content 1fr` second track to
+   zero width and the `<dd>` values paint off-edge. Forcing a min
+   width gives the value column room to render. */
 .maplibregl-popup-content .kept-bbox-row {
     border: 0;
     padding: 0;
     background: transparent;
+    min-width: 18rem;
 }
