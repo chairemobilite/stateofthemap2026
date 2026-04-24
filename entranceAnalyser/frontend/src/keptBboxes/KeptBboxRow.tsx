@@ -3,7 +3,7 @@
 
 import type { KeptBbox } from '../api';
 
-import { formatCoord, formatKeptDate, INT } from './format';
+import { DENSITY, formatCoord, formatKeptDate, INT, PERCENT } from './format';
 import { StatusPill } from './StatusPill';
 import type { ProgressStatus } from './progress';
 
@@ -39,6 +39,14 @@ export function KeptBboxRow({ bbox, status }: KeptBboxRowProps) {
                 </dd>
                 <dt>Population</dt>
                 <dd>{INT.format(bbox.population)}</dd>
+                <dt>Density</dt>
+                <dd>{DENSITY.format(bbox.density_per_km2)} / km²</dd>
+                <dt>vs. densest cell</dt>
+                <dd>{PERCENT.format(bbox.max_density_ratio)}</dd>
+                <dt>Built volume</dt>
+                <dd>{INT.format(bbox.built_volume)} m³</dd>
+                <dt>vs. densest built cell</dt>
+                <dd>{PERCENT.format(bbox.max_built_volume_ratio)}</dd>
                 <dt>Kept</dt>
                 <dd>{formatKeptDate(bbox.kept_at)}</dd>
             </dl>
