@@ -38,7 +38,9 @@ fn write_synthetic_geotiff(path: &std::path::Path, pixels: &[f32]) {
 
 #[tokio::test]
 async fn build_grid_aggregates_synthetic_tiff() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
 
     let dir = TempDir::new().unwrap();
     let tif = dir.path().join("synth.tif");
@@ -46,21 +48,23 @@ async fn build_grid_aggregates_synthetic_tiff() {
     let pixels: Vec<f32> = vec![
         // upper-left super-cell sums to 4, upper-right to 8,
         // lower-left to 0 (gets dropped), lower-right to 16
-        1.0, 1.0, 2.0, 2.0,
-        1.0, 1.0, 2.0, 2.0,
-        0.0, 0.0, 4.0, 4.0,
-        0.0, 0.0, 4.0, 4.0,
+        1.0, 1.0, 2.0, 2.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 4.0, 4.0,
     ];
     write_synthetic_geotiff(&tif, &pixels);
 
     let exe = env!("CARGO_BIN_EXE_entrance-analyser-build-grid");
     let status = Command::new(exe)
         .args([
-            "--input", tif.to_str().unwrap(),
-            "--database-url", &db.url,
-            "--cell-size-km", "2",
-            "--epoch", "2020",
-            "--min-population", "0.5",
+            "--input",
+            tif.to_str().unwrap(),
+            "--database-url",
+            &db.url,
+            "--cell-size-km",
+            "2",
+            "--epoch",
+            "2020",
+            "--min-population",
+            "0.5",
         ])
         .status()
         .expect("binary runs");
@@ -113,7 +117,9 @@ async fn build_grid_aggregates_synthetic_tiff() {
 
 #[tokio::test]
 async fn build_grid_merges_population_and_built_volume() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
 
     let dir = TempDir::new().unwrap();
     let pop_tif = dir.path().join("pop.tif");
@@ -123,20 +129,15 @@ async fn build_grid_merges_population_and_built_volume() {
     // (sum 16). Upper-right and lower-left are empty (would be dropped
     // by a pop-only build).
     let pop: Vec<f32> = vec![
-        1.0, 1.0, 0.0, 0.0,
-        1.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 4.0, 4.0,
-        0.0, 0.0, 4.0, 4.0,
+        1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 4.0, 4.0,
     ];
     // Built raster: upper-right super-cell has industrial built volume
     // (sum 2000) with zero residents - the "warehouse complex" case the
     // dual-raster path is meant to rescue. Lower-right is mixed
     // (sum 500). Upper-left and lower-left have no built volume.
     let built: Vec<f32> = vec![
-        0.0,   0.0,   500.0, 500.0,
-        0.0,   0.0,   500.0, 500.0,
-        0.0,   0.0,   125.0, 125.0,
-        0.0,   0.0,   125.0, 125.0,
+        0.0, 0.0, 500.0, 500.0, 0.0, 0.0, 500.0, 500.0, 0.0, 0.0, 125.0, 125.0, 0.0, 0.0, 125.0,
+        125.0,
     ];
     write_synthetic_geotiff(&pop_tif, &pop);
     write_synthetic_geotiff(&built_tif, &built);
@@ -144,12 +145,18 @@ async fn build_grid_merges_population_and_built_volume() {
     let exe = env!("CARGO_BIN_EXE_entrance-analyser-build-grid");
     let status = Command::new(exe)
         .args([
-            "--input",        pop_tif.to_str().unwrap(),
-            "--built-volume", built_tif.to_str().unwrap(),
-            "--database-url", &db.url,
-            "--cell-size-km", "2",
-            "--min-population",  "0.5",
-            "--min-built-volume", "0.5",
+            "--input",
+            pop_tif.to_str().unwrap(),
+            "--built-volume",
+            built_tif.to_str().unwrap(),
+            "--database-url",
+            &db.url,
+            "--cell-size-km",
+            "2",
+            "--min-population",
+            "0.5",
+            "--min-built-volume",
+            "0.5",
         ])
         .status()
         .expect("binary runs");
@@ -158,12 +165,10 @@ async fn build_grid_merges_population_and_built_volume() {
     // Three super-cells survive: upper-left (pop only), upper-right
     // (built only - the warehouse), lower-right (both). Lower-left has
     // neither signal and must stay dropped.
-    let rows = sqlx::query(
-        "SELECT pop, built_volume FROM grid_cells ORDER BY pop, built_volume",
-    )
-    .fetch_all(&db.pool)
-    .await
-    .unwrap();
+    let rows = sqlx::query("SELECT pop, built_volume FROM grid_cells ORDER BY pop, built_volume")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
     let seen: Vec<(f32, f32)> = rows
         .iter()
         .map(|r| (r.get::<f32, _>("pop"), r.get::<f32, _>("built_volume")))
@@ -174,12 +179,11 @@ async fn build_grid_merges_population_and_built_volume() {
         "industrial-only cell must survive on the built signal alone",
     );
 
-    let summary = sqlx::query(
-        "SELECT max_pop, max_built_volume, total_pop, total_built FROM grid_meta",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let summary =
+        sqlx::query("SELECT max_pop, max_built_volume, total_pop, total_built FROM grid_meta")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(summary.get::<f32, _>("max_pop"), 16.0);
     assert_eq!(summary.get::<f32, _>("max_built_volume"), 2000.0);
     assert_eq!(summary.get::<f64, _>("total_pop"), 20.0);
@@ -190,7 +194,9 @@ async fn build_grid_merges_population_and_built_volume() {
 
 #[tokio::test]
 async fn build_grid_rejects_mismatched_raster_shapes() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
 
     let dir = TempDir::new().unwrap();
     let pop_tif = dir.path().join("pop.tif");
@@ -216,29 +222,35 @@ async fn build_grid_rejects_mismatched_raster_shapes() {
     let exe = env!("CARGO_BIN_EXE_entrance-analyser-build-grid");
     let status = Command::new(exe)
         .args([
-            "--input",        pop_tif.to_str().unwrap(),
-            "--built-volume", built_tif.to_str().unwrap(),
-            "--database-url", &db.url,
-            "--cell-size-km", "2",
+            "--input",
+            pop_tif.to_str().unwrap(),
+            "--built-volume",
+            built_tif.to_str().unwrap(),
+            "--database-url",
+            &db.url,
+            "--cell-size-km",
+            "2",
         ])
         .status()
         .expect("binary runs");
-    assert!(!status.success(), "build-grid must fail on mismatched rasters");
+    assert!(
+        !status.success(),
+        "build-grid must fail on mismatched rasters"
+    );
 
     db.cleanup().await.ok();
 }
 
 #[tokio::test]
 async fn build_grid_is_idempotent() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
 
     let dir = TempDir::new().unwrap();
     let tif = dir.path().join("synth.tif");
     let pixels: Vec<f32> = vec![
-        1.0, 1.0, 2.0, 2.0,
-        1.0, 1.0, 2.0, 2.0,
-        0.0, 0.0, 4.0, 4.0,
-        0.0, 0.0, 4.0, 4.0,
+        1.0, 1.0, 2.0, 2.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 4.0, 4.0,
     ];
     write_synthetic_geotiff(&tif, &pixels);
 
@@ -246,9 +258,12 @@ async fn build_grid_is_idempotent() {
     for _ in 0..2 {
         let status = Command::new(exe)
             .args([
-                "--input", tif.to_str().unwrap(),
-                "--database-url", &db.url,
-                "--cell-size-km", "2",
+                "--input",
+                tif.to_str().unwrap(),
+                "--database-url",
+                &db.url,
+                "--cell-size-km",
+                "2",
             ])
             .status()
             .unwrap();
@@ -263,8 +278,14 @@ async fn build_grid_is_idempotent() {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-    assert_eq!(meta_count, 1, "re-running must not duplicate grid_meta rows");
-    assert_eq!(cells_count, 3, "re-running must replace grid_cells, not append");
+    assert_eq!(
+        meta_count, 1,
+        "re-running must not duplicate grid_meta rows"
+    );
+    assert_eq!(
+        cells_count, 3,
+        "re-running must replace grid_cells, not append"
+    );
 
     db.cleanup().await.ok();
 }

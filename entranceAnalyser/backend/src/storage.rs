@@ -154,7 +154,10 @@ impl KeptRow {
 fn polygon_wkt(b: &Bbox) -> String {
     format!(
         "POLYGON(({w} {s}, {e} {s}, {e} {n}, {w} {n}, {w} {s}))",
-        w = b.west, s = b.south, e = b.east, n = b.north,
+        w = b.west,
+        s = b.south,
+        e = b.east,
+        n = b.north,
     )
 }
 

@@ -93,7 +93,13 @@ impl<R: std::io::Read + Seek> PopReader<R> {
             .ok()
             .and_then(|s| s.trim().parse::<f64>().ok());
 
-        Ok(Self { decoder, width, height, geotransform, nodata })
+        Ok(Self {
+            decoder,
+            width,
+            height,
+            geotransform,
+            nodata,
+        })
     }
 
     /// Native pixel size in kilometres (assumes square pixels in metres).
@@ -107,10 +113,7 @@ impl<R: std::io::Read + Seek> PopReader<R> {
     ///
     /// Strips are laid out left-to-right top-to-bottom in the TIFF; tiles
     /// likewise (chunk index = `tile_y * tiles_x + tile_x`).
-    pub fn for_each_pixel<F>(
-        &mut self,
-        mut on_chunk: F,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    pub fn for_each_pixel<F>(&mut self, mut on_chunk: F) -> Result<(), Box<dyn std::error::Error>>
     where
         F: FnMut(usize, usize, usize, usize, &[f32]),
     {
@@ -128,9 +131,10 @@ impl<R: std::io::Read + Seek> PopReader<R> {
             let (w, h) = self.decoder.chunk_data_dimensions(idx);
             let (origin_x, origin_y) = match chunk_kind {
                 tiff::decoder::ChunkType::Strip => (0_u32, idx * default_h),
-                tiff::decoder::ChunkType::Tile => {
-                    ((idx % chunks_per_row) * default_w, (idx / chunks_per_row) * default_h)
-                }
+                tiff::decoder::ChunkType::Tile => (
+                    (idx % chunks_per_row) * default_w,
+                    (idx / chunks_per_row) * default_h,
+                ),
             };
 
             let chunk = self.decoder.read_chunk(idx)?;
@@ -139,7 +143,13 @@ impl<R: std::io::Read + Seek> PopReader<R> {
             buf_f32.reserve(n_pixels);
             decoding_to_f32(&chunk, n_pixels, self.nodata, &mut buf_f32)?;
 
-            on_chunk(origin_x as usize, origin_y as usize, w as usize, h as usize, &buf_f32);
+            on_chunk(
+                origin_x as usize,
+                origin_y as usize,
+                w as usize,
+                h as usize,
+                &buf_f32,
+            );
         }
         Ok(())
     }

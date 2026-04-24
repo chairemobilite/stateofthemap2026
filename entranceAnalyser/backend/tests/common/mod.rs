@@ -58,7 +58,9 @@ impl Drop for TestDb {
             rt.block_on(async move {
                 if let Ok(mut admin) = PgConnection::connect(&admin_url).await {
                     let _ = admin
-                        .execute(format!(r#"DROP DATABASE IF EXISTS "{name}" WITH (FORCE)"#).as_str())
+                        .execute(
+                            format!(r#"DROP DATABASE IF EXISTS "{name}" WITH (FORCE)"#).as_str(),
+                        )
                         .await;
                 }
             });
@@ -72,8 +74,8 @@ impl Drop for TestDb {
 pub async fn try_fresh_db() -> Result<TestDb, String> {
     config::load_dotenv();
     let prefix = config::connection_prefix().map_err(|e| e.to_string())?;
-    let base = std::env::var("PG_DATABASE_TEST")
-        .map_err(|_| "PG_DATABASE_TEST is not set".to_string())?;
+    let base =
+        std::env::var("PG_DATABASE_TEST").map_err(|_| "PG_DATABASE_TEST is not set".to_string())?;
 
     // Create the ephemeral database name up front so the Drop impl can
     // clean up even if migrations fail partway.
@@ -96,7 +98,12 @@ pub async fn try_fresh_db() -> Result<TestDb, String> {
         .await
         .map_err(|e| format!("migrations failed: {e}"))?;
 
-    Ok(TestDb { pool, name, url, admin_url })
+    Ok(TestDb {
+        pool,
+        name,
+        url,
+        admin_url,
+    })
 }
 
 /// Skip the test body with an `eprintln!` when Postgres is unavailable.

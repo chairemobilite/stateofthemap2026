@@ -58,7 +58,10 @@ struct Summary {
 /// storage footprint (~800k rows globally) and locality (a 10 × 10 km
 /// box is roughly the size of a small city).
 #[derive(Parser, Debug)]
-#[command(version, about = "Aggregate GHS-POP (+ optional GHS-BUILT-V) into the entrance-analyser Postgres grid")]
+#[command(
+    version,
+    about = "Aggregate GHS-POP (+ optional GHS-BUILT-V) into the entrance-analyser Postgres grid"
+)]
 struct Args {
     /// Path to the GHS-POP Mollweide GeoTIFF (.tif, unzipped).
     #[arg(long)]
@@ -119,8 +122,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "kept {} cells | pop: total = {:.0}, max = {:.0} | built_v: total = {:.0}, max = {:.0}",
         cells.len(),
-        summary.total_pop, summary.max_pop,
-        summary.total_built, summary.max_built,
+        summary.total_pop,
+        summary.max_pop,
+        summary.total_built,
+        summary.max_built,
     );
 
     let pool = db::connect(&database_url).await?;
@@ -130,7 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "wrote {} cells to {} in {:.1}s",
-        cells.len(), database_url, started.elapsed().as_secs_f64(),
+        cells.len(),
+        database_url,
+        started.elapsed().as_secs_f64(),
     );
     Ok(())
 }
@@ -151,7 +158,8 @@ fn aggregate(args: &Args) -> Result<(Vec<Cell>, Summary), Box<dyn std::error::Er
                 return Err(format!(
                     "built-volume raster shape {}×{} does not match population shape {}×{}",
                     b.out_width, b.out_height, pop.out_width, pop.out_height,
-                ).into());
+                )
+                .into());
             }
             Some(b.dense)
         }
@@ -213,14 +221,17 @@ fn aggregate_one(
     let mut reader = PopReader::open(&readable)?;
     println!(
         "[{label}] source: {} × {} px @ {:.3} km/px (Mollweide)",
-        reader.width, reader.height, reader.native_pixel_km(),
+        reader.width,
+        reader.height,
+        reader.native_pixel_km(),
     );
 
     let native_km = reader.native_pixel_km();
     if (native_km - native_km.round()).abs() > 1e-3 {
         return Err(format!(
             "[{label}] expected an integer-km native resolution, got {native_km:.6} km/px",
-        ).into());
+        )
+        .into());
     }
     let native_km = native_km.round() as u32;
     if cell_size_km < native_km {
@@ -238,8 +249,7 @@ fn aggregate_one(
     let mut aggregator = Aggregator::new(reader.width as usize, reader.height as usize, factor);
     println!(
         "[{label}] aggregating into {} × {} cells of {} × {} km (factor = {})",
-        aggregator.out_width, aggregator.out_height,
-        cell_size_km, cell_size_km, factor,
+        aggregator.out_width, aggregator.out_height, cell_size_km, cell_size_km, factor,
     );
 
     let mut chunks_seen = 0_u64;
@@ -301,7 +311,7 @@ async fn write_to_postgres(
         let lats: Vec<f32> = chunk.iter().map(|c| c.lat).collect();
         let lons: Vec<f32> = chunk.iter().map(|c| c.lon).collect();
         let pops: Vec<f32> = chunk.iter().map(|c| c.pop).collect();
-        let bvs:  Vec<f32> = chunk.iter().map(|c| c.built_volume).collect();
+        let bvs: Vec<f32> = chunk.iter().map(|c| c.built_volume).collect();
         sqlx::query(
             "INSERT INTO grid_cells \
              (cell_size_km, epoch, lat, lon, pop, built_volume, geom) \

@@ -78,7 +78,9 @@ impl Aggregator {
     ///
     /// Each yielded item is `(out_x, out_y, population)`.
     pub fn finish(self, min_population: f32) -> impl Iterator<Item = (usize, usize, f32)> {
-        let Self { out_width, sums, .. } = self;
+        let Self {
+            out_width, sums, ..
+        } = self;
         sums.into_iter().enumerate().filter_map(move |(idx, pop)| {
             if pop >= min_population {
                 Some((idx % out_width, idx / out_width, pop))
@@ -103,9 +105,9 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case(1, 4)]   // 4×4 cells of 1 native pixel each
-    #[case(2, 2)]   // 2×2 cells of 2×2 native pixels
-    #[case(4, 1)]   // 1×1 cell of 4×4 native pixels (= total)
+    #[case(1, 4)] // 4×4 cells of 1 native pixel each
+    #[case(2, 2)] // 2×2 cells of 2×2 native pixels
+    #[case(4, 1)] // 1×1 cell of 4×4 native pixels (= total)
     fn aggregates_uniform_input(#[case] factor: usize, #[case] expected_side: usize) {
         let mut a = Aggregator::new(4, 4, factor);
         let pixels: Vec<f32> = (0..16).map(|_| 1.0).collect();
@@ -151,8 +153,10 @@ mod tests {
         assert_eq!(
             cells,
             vec![
-                (0, 0, 4.0), (1, 0, 4.0),  // top row: 4 pixels × 1.0
-                (0, 1, 8.0), (1, 1, 8.0),  // bottom row: 4 pixels × 2.0
+                (0, 0, 4.0),
+                (1, 0, 4.0), // top row: 4 pixels × 1.0
+                (0, 1, 8.0),
+                (1, 1, 8.0), // bottom row: 4 pixels × 2.0
             ],
         );
     }

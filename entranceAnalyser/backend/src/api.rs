@@ -10,14 +10,14 @@
 //! round-trip and keeps horizontal scaling trivial.
 
 use axum::{
-    Json, Router,
     extract::{Query, State},
     http::StatusCode,
     routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::bbox::{Bbox, KeptBbox, random_bbox};
+use crate::bbox::{random_bbox, Bbox, KeptBbox};
 use crate::sampler::{SampleError, Sampler, Strategy};
 use crate::storage::PgStore;
 
@@ -143,7 +143,10 @@ async fn decision_handler(
         Decision::Keep => state.store.append(req.bbox).await.map_err(internal)?,
         Decision::Reject => state.store.count().await.map_err(internal)?,
     };
-    Ok(Json(DecisionResponse { ok: true, total_kept }))
+    Ok(Json(DecisionResponse {
+        ok: true,
+        total_kept,
+    }))
 }
 
 #[derive(Debug, Serialize)]

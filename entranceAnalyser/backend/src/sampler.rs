@@ -192,7 +192,10 @@ impl Sampler {
         let (lat, lon, pop, built): (f32, f32, f32, f32) = match strategy {
             Strategy::Uniform => self.query_uniform().await?,
             Strategy::Population => self.query_weighted_by("pop", "pop > 0").await?,
-            Strategy::Built => self.query_weighted_by("built_volume", "built_volume > 0").await?,
+            Strategy::Built => {
+                self.query_weighted_by("built_volume", "built_volume > 0")
+                    .await?
+            }
             Strategy::Blended { alpha } => self.query_blended(alpha).await?,
         };
         Ok(self.decorate(lat as f64, lon as f64, pop as f64, built as f64))
@@ -339,9 +342,9 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case(1, 100.0, 100.0)]    // 1 km cell, 100 people → 100 / km²
-    #[case(2, 100.0, 25.0)]     // 2 km cell (4 km²), 100 people → 25 / km²
-    #[case(10, 100.0, 1.0)]     // 10 km cell (100 km²), 100 people → 1 / km²
+    #[case(1, 100.0, 100.0)] // 1 km cell, 100 people → 100 / km²
+    #[case(2, 100.0, 25.0)] // 2 km cell (4 km²), 100 people → 25 / km²
+    #[case(10, 100.0, 1.0)] // 10 km cell (100 km²), 100 people → 1 / km²
     fn decorate_computes_density(
         #[case] cell_size_km: u32,
         #[case] pop: f64,
@@ -352,23 +355,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case(200.0, 200.0, 1.0)]   // max cell → ratio 1.0
-    #[case(10.0, 200.0, 0.05)]   // 10/200 → 0.05
-    #[case(0.0, 200.0, 0.0)]     // no people → ratio 0
-    fn decorate_computes_max_ratio(
-        #[case] pop: f64,
-        #[case] max_pop: f64,
-        #[case] expected: f64,
-    ) {
+    #[case(200.0, 200.0, 1.0)] // max cell → ratio 1.0
+    #[case(10.0, 200.0, 0.05)] // 10/200 → 0.05
+    #[case(0.0, 200.0, 0.0)] // no people → ratio 0
+    fn decorate_computes_max_ratio(#[case] pop: f64, #[case] max_pop: f64, #[case] expected: f64) {
         let max_density_per_km2 = max_pop / 100.0; // 10 × 10 km → 100 km²
         let cell = Sampler::decorate_for_tests(10, max_density_per_km2, 0.0, 0.0, pop);
         assert!((cell.max_density_ratio - expected).abs() < 1e-9);
     }
 
     #[rstest]
-    #[case(500.0, 2000.0, 0.25)]  // 500 / 2000 → 0.25
-    #[case(2000.0, 2000.0, 1.0)]  // top built cell → 1.0
-    #[case(0.0, 2000.0, 0.0)]     // no built volume → 0
+    #[case(500.0, 2000.0, 0.25)] // 500 / 2000 → 0.25
+    #[case(2000.0, 2000.0, 1.0)] // top built cell → 1.0
+    #[case(0.0, 2000.0, 0.0)] // no built volume → 0
     fn decorate_computes_max_built_ratio(
         #[case] built: f64,
         #[case] max_built: f64,
@@ -390,10 +389,7 @@ mod tests {
     #[case(Strategy::Population, false)]
     #[case(Strategy::Built, true)]
     #[case(Strategy::Blended { alpha: 0.5 }, true)]
-    fn needs_built_flags_the_right_strategies(
-        #[case] strategy: Strategy,
-        #[case] expected: bool,
-    ) {
+    fn needs_built_flags_the_right_strategies(#[case] strategy: Strategy, #[case] expected: bool) {
         assert_eq!(strategy.needs_built(), expected);
     }
 }
