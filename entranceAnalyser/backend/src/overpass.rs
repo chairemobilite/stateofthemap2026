@@ -5,6 +5,11 @@
 //! element with the group it matched (resolved client-side via the
 //! same `PoiTagConfig` to avoid emitting N separate queries).
 //!
+//! Exceptions from `poi_tags.yml` are pushed into the QL itself as
+//! `!=` filters, so excluded features never come back over the wire;
+//! [`PoiTagConfig::group_for_tags`] still re-checks them client-side
+//! as a defense-in-depth safety net.
+//!
 //! Only the public methods that the HTTP handler needs are exposed
 //! here; the QL builder is also public so the handler's integration
 //! tests can assert on its output without hitting the network.
@@ -125,8 +130,17 @@ impl OverpassClient {
 }
 
 /// Build the Overpass QL query for one bbox and every group in
-/// `config`. Public so tests can assert on the output without a
-/// network round-trip.
+/// `config`. Each group expression becomes one `nwr[...]` line; any
+/// exception sharing the line's key is appended as a `!=` negation
+/// so vacant storefronts, benches, and the rest of the
+/// `exceptions:` list never travel back over the wire. Public so
+/// tests can assert on the output without a network round-trip.
+///
+/// A wildcard exception on a key (`amenity=*`) drops every group
+/// line that filters on that same key — the line would be empty by
+/// construction, and Overpass rejects `[key!=*]` syntax. The
+/// post-fetch [`PoiTagConfig::group_for_tags`] still applies as a
+/// safety net for any feature that slips through.
 pub fn build_query(bbox: &Bbox, config: &PoiTagConfig) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -141,13 +155,23 @@ pub fn build_query(bbox: &Bbox, config: &PoiTagConfig) -> String {
     .unwrap();
     out.push_str("(\n");
     for exprs in config.groups.values() {
-        for expr in exprs {
+        'lines: for expr in exprs {
             // `nwr` queries nodes + ways + relations in a single
             // clause (Overpass QL shortcut).
-            match &expr.value {
-                None => writeln!(&mut out, "    nwr[{:?}];", expr.key).unwrap(),
-                Some(v) => writeln!(&mut out, "    nwr[{:?}={:?}];", expr.key, v).unwrap(),
+            let mut line = match &expr.value {
+                None => format!("nwr[{:?}]", expr.key),
+                Some(v) => format!("nwr[{:?}={:?}]", expr.key, v),
+            };
+            for exc in &config.exceptions {
+                if exc.key != expr.key {
+                    continue;
+                }
+                match &exc.value {
+                    None => continue 'lines,
+                    Some(v) => write!(&mut line, "[{:?}!={:?}]", exc.key, v).unwrap(),
+                }
             }
+            writeln!(&mut out, "    {line};").unwrap();
         }
     }
     out.push_str(");\nout center tags;\n");
@@ -266,6 +290,18 @@ mod tests {
         }
     }
 
+    /// Strip the leading whitespace + `;` so assertions can compare
+    /// just the `nwr[...]` body without baking the formatting choice
+    /// into every test. Returns owned strings so callers can pass an
+    /// inline `build_query(...)` without keeping the buffer alive.
+    fn group_lines(ql: &str) -> Vec<String> {
+        ql.lines()
+            .filter_map(|l| l.trim().strip_suffix(';').map(str::trim))
+            .filter(|l| l.starts_with("nwr"))
+            .map(str::to_string)
+            .collect()
+    }
+
     #[test]
     fn query_includes_bbox_and_every_group_expression() {
         let cfg = sample_config(
@@ -287,6 +323,53 @@ mod tests {
             "missing second exact match: {ql}"
         );
         assert!(ql.contains("out center tags;"), "missing out clause: {ql}");
+    }
+
+    #[test]
+    fn query_attaches_exception_negations_to_matching_group_lines() {
+        // `shop=*` line should pick up every `shop=...` exception as
+        // a `!=` filter; the unrelated `highway=bus_stop` line stays
+        // bare because no exception shares its key.
+        let cfg = sample_config(
+            "groups:\n    shops:\n        - shop=*\n    \
+             public_transport:\n        - highway=bus_stop\n\
+             exceptions:\n    - shop=vacant\n    - shop=no\n    - amenity=bench\n",
+        );
+        let lines = group_lines(&build_query(&sample_bbox(), &cfg));
+        assert_eq!(
+            lines,
+            vec![
+                "nwr[\"shop\"][\"shop\"!=\"vacant\"][\"shop\"!=\"no\"]",
+                "nwr[\"highway\"=\"bus_stop\"]",
+            ],
+        );
+    }
+
+    #[test]
+    fn query_skips_group_line_when_an_exception_is_wildcard_on_same_key() {
+        // `amenity=*` exception disqualifies the entire amenity key
+        // -- emitting `[amenity!=*]` is invalid Overpass QL, so the
+        // group line is dropped. The `shop=*` line survives because
+        // its key isn't wildcard-excepted.
+        let cfg = sample_config(
+            "groups:\n    shops:\n        - shop=*\n    amenities:\n        - amenity=*\n\
+             exceptions:\n    - amenity=*\n",
+        );
+        let lines = group_lines(&build_query(&sample_bbox(), &cfg));
+        assert_eq!(lines, vec!["nwr[\"shop\"]"]);
+    }
+
+    #[test]
+    fn query_does_not_attach_exception_to_unrelated_group_line() {
+        // A `craft=*` group with `amenity=bench` exceptions must not
+        // pick up the bench negation -- exceptions are scoped to
+        // their key.
+        let cfg = sample_config(
+            "groups:\n    crafts:\n        - craft=*\n\
+             exceptions:\n    - amenity=bench\n",
+        );
+        let lines = group_lines(&build_query(&sample_bbox(), &cfg));
+        assert_eq!(lines, vec!["nwr[\"craft\"]"]);
     }
 
     fn make_response(elements: serde_json::Value) -> serde_json::Value {

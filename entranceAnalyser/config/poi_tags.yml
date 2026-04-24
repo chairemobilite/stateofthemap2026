@@ -148,10 +148,16 @@ groups:
 # below should be treated as non-POIs (e.g. `amenity=*` minus street
 # furniture). Same `key=value` syntax as groups.
 #
-# Applied by `PoiTagConfig::group_for_tags`: when an exception matches,
-# the helper returns `None` so the picker drops the feature before
-# random selection (and the future `poi_count` runner will skip it
-# without incrementing any group).
+# Two-layer enforcement:
+#   1. `overpass::build_query` attaches every exception sharing a
+#      group line's key as a `!=` negation, so excluded features
+#      never come back over the wire (e.g. `nwr["amenity"]
+#      ["amenity"!="bench"]["amenity"!="bbq"]...`). A wildcard
+#      exception (`key=*`) drops the whole group line for that key.
+#   2. `PoiTagConfig::group_for_tags` re-checks the exceptions
+#      client-side as a safety net, so the picker still drops any
+#      feature that slips through (mirror lag, alternate Overpass
+#      mirror behaviour, future schema changes).
 #
 # Rationale: drop curbside / micro / marker features and things that are not
 # “destinations in themselves” (viewpoints, a tent pitch inside a campsite,

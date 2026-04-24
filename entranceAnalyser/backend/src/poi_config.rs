@@ -8,6 +8,12 @@
 //! **and** matches no exception. Parsing happens once at load time so
 //! the hot path ([`PoiTagConfig::group_for_tags`]) is pure lookup.
 //!
+//! Exceptions are also consumed by `overpass::build_query`, which
+//! turns them into per-line `!=` negations on the QL so excluded
+//! features never come back from Overpass. The client-side
+//! [`PoiTagConfig::group_for_tags`] still applies as a safety net
+//! and stays the canonical contract.
+//!
 //! ```yaml
 //! groups:
 //!     shops:
