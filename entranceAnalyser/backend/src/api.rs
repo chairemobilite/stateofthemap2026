@@ -11,14 +11,14 @@
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::bbox::{Bbox, KeptBbox, random_bbox};
-use crate::sampler::Sampler;
+use crate::sampler::{SampleError, Sampler, Strategy};
 use crate::storage::PgStore;
 
 /// Shared state: the sampler (optional when no grid has been built yet)
@@ -44,13 +44,72 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn random_handler(State(state): State<AppState>) -> Result<Json<Bbox>, ApiError> {
+/// `?strategy=uniform|population|built|blended` and optional
+/// `?alpha=0.0..=1.0` (only consulted when `strategy=blended`). Defaults
+/// to `blended` with α=0.5, which is the recommended per-draw mix.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub struct RandomQuery {
+    pub strategy: Option<StrategyName>,
+    pub alpha: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StrategyName {
+    Uniform,
+    Population,
+    Built,
+    Blended,
+}
+
+impl RandomQuery {
+    /// Resolve the query parameters into a concrete [`Strategy`], or an
+    /// HTTP 400 error when `alpha` is outside `[0, 1]`.
+    fn into_strategy(self) -> Result<Strategy, ApiError> {
+        let name = self.strategy.unwrap_or(StrategyName::Blended);
+        let strategy = match name {
+            StrategyName::Uniform => Strategy::Uniform,
+            StrategyName::Population => Strategy::Population,
+            StrategyName::Built => Strategy::Built,
+            StrategyName::Blended => {
+                let alpha = self.alpha.unwrap_or(Strategy::DEFAULT_ALPHA);
+                if !(0.0..=1.0).contains(&alpha) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("alpha must be in [0, 1], got {alpha}"),
+                    ));
+                }
+                Strategy::Blended { alpha }
+            }
+        };
+        Ok(strategy)
+    }
+}
+
+async fn random_handler(
+    State(state): State<AppState>,
+    Query(query): Query<RandomQuery>,
+) -> Result<Json<Bbox>, ApiError> {
     let sampler = state.sampler.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "no GHS-POP grid loaded; run `entrance-analyser-build-grid` first".into(),
     ))?;
-    let bbox = random_bbox(sampler).await.map_err(internal)?;
+    let strategy = query.into_strategy()?;
+    let bbox = random_bbox(sampler, strategy).await.map_err(sample_error)?;
     Ok(Json(bbox))
+}
+
+fn sample_error(err: SampleError) -> ApiError {
+    match err {
+        SampleError::BuiltUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this strategy needs GHS-BUILT-V data; rerun \
+             `entrance-analyser-build-grid --built-volume <path>` to enable it"
+                .into(),
+        ),
+        SampleError::Db(e) => internal(e),
+    }
 }
 
 #[derive(Debug, Deserialize)]

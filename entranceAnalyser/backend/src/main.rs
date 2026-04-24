@@ -27,8 +27,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sampler = Sampler::from_latest(pool.clone()).await?;
     match &sampler {
         Some(s) => println!(
-            "sampling from grid_meta: cell_size_km={}, epoch={}, max density = {:.0}/km²",
+            "sampling from grid_meta: cell_size_km={}, epoch={}, \
+             max density = {:.0}/km², built data = {}",
             s.cell_size_km(), s.epoch(), s.max_density_per_km2(),
+            if s.has_built_data() { "yes" } else { "no (uniform/population only)" },
         ),
         None => eprintln!(
             "warning: no grid found; /api/bbox/random will return 503 \

@@ -36,9 +36,10 @@ impl PgStore {
             "INSERT INTO kept_bboxes (id, west, south, east, north, \
                                       center_lon, center_lat, cell_size_km, \
                                       population, density_per_km2, max_density_ratio, \
+                                      built_volume, max_built_volume_ratio, \
                                       geom) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, \
-                     ST_GeomFromText($12, 4326))",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+                     ST_GeomFromText($14, 4326))",
         )
         .bind(bbox.id)
         .bind(bbox.west)
@@ -51,6 +52,8 @@ impl PgStore {
         .bind(bbox.population)
         .bind(bbox.density_per_km2)
         .bind(bbox.max_density_ratio)
+        .bind(bbox.built_volume)
+        .bind(bbox.max_built_volume_ratio)
         .bind(polygon_wkt)
         .execute(&self.pool)
         .await?;
@@ -63,7 +66,7 @@ impl PgStore {
         let rows: Vec<KeptRow> = sqlx::query_as::<_, KeptRow>(
             "SELECT id, west, south, east, north, center_lon, center_lat, \
                     cell_size_km, population, density_per_km2, max_density_ratio, \
-                    kept_at \
+                    built_volume, max_built_volume_ratio, kept_at \
              FROM kept_bboxes ORDER BY kept_at ASC, id ASC",
         )
         .fetch_all(&self.pool)
@@ -119,6 +122,8 @@ struct KeptRow {
     population: f64,
     density_per_km2: f64,
     max_density_ratio: f64,
+    built_volume: f64,
+    max_built_volume_ratio: f64,
     kept_at: DateTime<Utc>,
 }
 
@@ -136,6 +141,8 @@ impl KeptRow {
                 population: self.population,
                 density_per_km2: self.density_per_km2,
                 max_density_ratio: self.max_density_ratio,
+                built_volume: self.built_volume,
+                max_built_volume_ratio: self.max_built_volume_ratio,
             },
             kept_at: self.kept_at,
         }
@@ -169,6 +176,8 @@ mod tests {
             population: 0.0,
             density_per_km2: 0.0,
             max_density_ratio: 0.0,
+            built_volume: 0.0,
+            max_built_volume_ratio: 0.0,
         };
         assert_eq!(
             polygon_wkt(&b),

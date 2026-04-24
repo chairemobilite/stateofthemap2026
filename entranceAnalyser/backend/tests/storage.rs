@@ -21,6 +21,8 @@ fn sample_bbox(center: [f64; 2]) -> Bbox {
         population: 12_500.0,
         density_per_km2: 125.0,
         max_density_ratio: 0.25,
+        built_volume: 750_000.0,
+        max_built_volume_ratio: 0.3,
     }
 }
 

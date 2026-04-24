@@ -19,21 +19,37 @@ use entrance_analyser_backend::{
     storage::PgStore,
 };
 use http_body_util::BodyExt;
+use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
 
-async fn seed_single_cell(pool: &sqlx::PgPool) {
+/// Seed one cell with both pop and built-volume signals so the default
+/// `blended` strategy can draw from a non-empty grid. `with_built`
+/// controls whether grid-wide totals advertise built-volume availability;
+/// the `built_missing_returns_503` test sets it to false.
+async fn seed_single_cell(pool: &sqlx::PgPool, with_built: bool) {
+    let (meta_built_total, meta_built_max, cell_built) = if with_built {
+        (500.0_f64, 500.0_f32, 500.0_f32)
+    } else {
+        (0.0_f64, 0.0_f32, 0.0_f32)
+    };
     sqlx::query(
-        "INSERT INTO grid_meta (cell_size_km, epoch, max_pop) VALUES (10, 2020, 1000)",
+        "INSERT INTO grid_meta \
+         (cell_size_km, epoch, max_pop, max_built_volume, total_pop, total_built) \
+         VALUES (10, 2020, 1000, $1, 1000, $2)",
     )
+    .bind(meta_built_max)
+    .bind(meta_built_total)
     .execute(pool)
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO grid_cells (cell_size_km, epoch, lat, lon, pop, geom) \
-         VALUES (10, 2020, 45.5, -73.5, 1000, \
+        "INSERT INTO grid_cells \
+         (cell_size_km, epoch, lat, lon, pop, built_volume, geom) \
+         VALUES (10, 2020, 45.5, -73.5, 1000, $1, \
                  ST_SetSRID(ST_MakePoint(-73.5, 45.5), 4326))",
     )
+    .bind(cell_built)
     .execute(pool)
     .await
     .unwrap();
@@ -56,7 +72,7 @@ async fn json_body<T: serde::de::DeserializeOwned>(resp: axum::response::Respons
 #[tokio::test]
 async fn random_keep_reject_flow() {
     let Some(db) = common::pg_or_skip().await else { return };
-    seed_single_cell(&db.pool).await;
+    seed_single_cell(&db.pool, true).await;
     let app = build_router(db.pool.clone()).await;
 
     let resp = app.clone()
@@ -123,6 +139,80 @@ async fn random_keep_reject_flow() {
     let reply: serde_json::Value = json_body(resp).await;
     assert_eq!(reply["total_kept"], 1);
 
+    db.cleanup().await.ok();
+}
+
+#[rstest]
+#[case("uniform")]
+#[case("population")]
+#[case("built")]
+#[case("blended")]
+#[case("blended&alpha=0.25")]
+#[tokio::test]
+async fn every_strategy_serves_a_bbox_when_data_present(#[case] qs: &str) {
+    let Some(db) = common::pg_or_skip().await else { return };
+    seed_single_cell(&db.pool, true).await;
+    let app = build_router(db.pool.clone()).await;
+
+    let uri = format!("/api/bbox/random?strategy={qs}");
+    let resp = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "strategy={qs}");
+    let bbox: Bbox = json_body(resp).await;
+    assert_eq!(bbox.population, 1000.0);
+    assert_eq!(bbox.built_volume, 500.0);
+    db.cleanup().await.ok();
+}
+
+#[rstest]
+#[case("built", StatusCode::SERVICE_UNAVAILABLE)]
+#[case("blended", StatusCode::SERVICE_UNAVAILABLE)]
+#[case("uniform", StatusCode::OK)]
+#[case("population", StatusCode::OK)]
+#[tokio::test]
+async fn built_strategies_need_built_data(
+    #[case] strategy: &str,
+    #[case] expected: StatusCode,
+) {
+    let Some(db) = common::pg_or_skip().await else { return };
+    seed_single_cell(&db.pool, false).await;
+    let app = build_router(db.pool.clone()).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/bbox/random?strategy={strategy}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), expected, "strategy={strategy}");
+    db.cleanup().await.ok();
+}
+
+#[rstest]
+#[case("blended&alpha=-0.1")]
+#[case("blended&alpha=1.5")]
+#[case("blended&alpha=not-a-number")]
+#[tokio::test]
+async fn invalid_alpha_returns_400(#[case] qs: &str) {
+    let Some(db) = common::pg_or_skip().await else { return };
+    seed_single_cell(&db.pool, true).await;
+    let app = build_router(db.pool.clone()).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/bbox/random?strategy={qs}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "qs={qs}");
     db.cleanup().await.ok();
 }
 

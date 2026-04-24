@@ -16,7 +16,7 @@ use geo::{Destination, Haversine, Point};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::sampler::{SampledCell, Sampler};
+use crate::sampler::{SampleError, SampledCell, Sampler, Strategy};
 
 /// A candidate bounding box emitted by `/api/bbox/random`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,6 +37,14 @@ pub struct Bbox {
     pub density_per_km2: f64,
     /// `density_per_km2 / max_density_per_km2_in_grid`, in `[0, 1]`.
     pub max_density_ratio: f64,
+    /// Total built volume in m³ inside the cell, from GHS-BUILT-V. Zero
+    /// when the grid was built without `--built-volume`.
+    #[serde(default)]
+    pub built_volume: f64,
+    /// `built_volume / max_built_volume_in_grid`, in `[0, 1]`. Zero when
+    /// no built-volume data is available.
+    #[serde(default)]
+    pub max_built_volume_ratio: f64,
 }
 
 /// A kept bbox with the acceptance timestamp, as returned by
@@ -73,12 +81,15 @@ pub fn bbox_from_cell(sampled: SampledCell, cell_size_km: u32) -> Bbox {
         population: sampled.pop,
         density_per_km2: sampled.density_per_km2,
         max_density_ratio: sampled.max_density_ratio,
+        built_volume: sampled.built_volume,
+        max_built_volume_ratio: sampled.max_built_volume_ratio,
     }
 }
 
-/// Convenience: draw a cell from `sampler` and turn it into a `Bbox`.
-pub async fn random_bbox(sampler: &Sampler) -> Result<Bbox, sqlx::Error> {
-    let cell = sampler.sample().await?;
+/// Convenience: draw a cell from `sampler` under `strategy` and turn it
+/// into a `Bbox`.
+pub async fn random_bbox(sampler: &Sampler, strategy: Strategy) -> Result<Bbox, SampleError> {
+    let cell = sampler.sample(strategy).await?;
     Ok(bbox_from_cell(cell, sampler.cell_size_km()))
 }
 
@@ -116,6 +127,14 @@ mod tests {
         assert_eq!(b.population, 1000.0);
         assert!((b.density_per_km2 - 10.0).abs() < 1e-9);
         assert!((b.max_density_ratio - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn built_volume_is_propagated() {
+        let cell = Sampler::decorate_for_tests_full(10, 10.0, 2000.0, 0.0, 0.0, 1000.0, 500.0);
+        let b = bbox_from_cell(cell, 10);
+        assert_eq!(b.built_volume, 500.0);
+        assert!((b.max_built_volume_ratio - 0.25).abs() < 1e-9);
     }
 
     #[test]
