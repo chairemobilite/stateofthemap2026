@@ -48,19 +48,15 @@ jobs:
             entranceAnalyser/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('entranceAnalyser/**/Cargo.toml') }}
 
-      - name: Provision application and test databases
-        run: |
-          # The integration-test harness carves a fresh, uniquely-named
-          # database out of $PG_DATABASE_TEST on every run, but it
-          # connects through the server's built-in `postgres` database,
-          # which the service container already provides. We create
-          # $PG_DATABASE here so the server binary (and anyone running
-          # the build-grid binary) can point at it without extra setup.
-          psql "postgres://postgres@localhost:5432/postgres" \
-            -c "CREATE DATABASE ${PG_DATABASE};"
-
       - name: cargo check
         run: cargo check --all-targets
+
+      # Uses the same helper documented in entranceAnalyser/README.md so
+      # CI and local bootstrap go through one code path. Idempotent:
+      # the command no-ops if the databases already exist on a cached
+      # service container.
+      - name: Provision application and test databases
+        run: cargo run --quiet --bin entrance-analyser-ensure-db
 
       - name: cargo test
         run: cargo test --all-targets

@@ -54,10 +54,9 @@ available (Postgres.app, `brew install postgis`, or the
 `.env` and tweak the port/user if needed, then:
 
 ```bash
-createdb entrance_analyser        # matches $PG_DATABASE
-createdb entrance_analyser_test   # matches $PG_DATABASE_TEST
 cd entranceAnalyser
-cargo test                        # runs migrations in a disposable DB per test
+cargo run --bin entrance-analyser-ensure-db   # creates $PG_DATABASE and $PG_DATABASE_TEST
+cargo test                                    # migrations run in a disposable DB per test
 cd frontend && yarn test
 ```
 

@@ -39,3 +39,7 @@ tower = { version = "0.5.3", features = ["util"] }
 [[bin]]
 name = "entrance-analyser-build-grid"
 path = "src/bin/build_grid.rs"
+
+[[bin]]
+name = "entrance-analyser-ensure-db"
+path = "src/bin/ensure_db.rs"

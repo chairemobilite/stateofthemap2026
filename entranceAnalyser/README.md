@@ -37,16 +37,28 @@ minutes.
 ### 1. Provision a Postgres database with PostGIS
 
 Any PostgreSQL 14+ install works as long as the `postgis` extension is
-available on the server. On macOS with Postgres.app or Homebrew:
+available on the server (Postgres.app, `brew install postgis`, or the
+`postgis/postgis` Docker image).
+
+Copy `.env.example` to `.env`, adjust `PG_CONNECTION_STRING_PREFIX` if
+your server isn't at `localhost:5432`, then create the two databases
+the project needs. You don't need `psql` / `createdb` on your `PATH` —
+the backend ships a tiny helper that talks to the server over sqlx:
 
 ```bash
-createdb entrance_analyser        # matches $PG_DATABASE in .env
-createdb entrance_analyser_test   # matches $PG_DATABASE_TEST in .env
+cd entranceAnalyser
+cargo run --bin entrance-analyser-ensure-db
 ```
 
-The backend enables the extension automatically on startup via the
-embedded `0001_init.sql` migration — you do **not** need to run
-`sqlx migrate run` by hand.
+The command is idempotent (re-running it prints `already exists,
+skipping`) and only creates the databases named in
+`PG_DATABASE` / `PG_DATABASE_TEST`. If you do have the client tools
+installed, `createdb "$PG_DATABASE" && createdb "$PG_DATABASE_TEST"`
+works just as well.
+
+Either way, the backend enables the PostGIS extension automatically on
+startup via the embedded `0001_init.sql` migration — you do **not**
+need to run `sqlx migrate run` by hand.
 
 ### 2. Download the source raster
 
@@ -83,11 +95,11 @@ replaces the existing rows in a single transaction.
 resolution) up to `100`. Common picks:
 
 | Cell size | Inhabited cells | Rows inserted |
-|-----------|------------------|---------------|
-| 1 km      | ~15 M            | same          |
-| 5 km      | ~600 k           | same          |
-| 10 km     | ~800 k           | same          |
-| 25 km     | ~25 k            | same          |
+|-----------|-----------------|---------------|
+| 1 km      | ~15 M           | same          |
+| 5 km      | ~600 k          | same          |
+| 10 km     | ~150 k          | same          |
+| 25 km     | ~25 k           | same          |
 
 `--min-population` defaults to `0.5` (drops empty / ocean cells).
 
