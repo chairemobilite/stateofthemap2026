@@ -14,6 +14,21 @@
 //! result is an exact probability-proportional-to-size draw in a single
 //! SQL statement, no schema gymnastics.
 //!
+//! **Log-space form (what we actually run).** The naive
+//! `random() ^ (1 / weight)` underflows Postgres' `double precision`
+//! as soon as `1 / weight` gets large — and for our normalised
+//! blended weights (sum = 1 across ~800 k cells, so average weight
+//! ~1e-6 and tail cells well below 1e-9) `1 / weight` is in the
+//! `1e6 – 1e9` range, which pushes `0.5 ^ (1/weight)` under f64's
+//! ~2.2e-308 lower bound. Postgres then raises
+//! `value out of range: underflow`, killing the whole query. We
+//! therefore rank by the monotone equivalent
+//! `ln(1 - random()) / weight DESC`. Taking `ln` of the same
+//! expression preserves the ordering; `1 - random()` lives in `(0, 1]`
+//! so `ln` is always finite and never underflows. This is the standard
+//! Efraimidis-Spirakis-in-exponential-variates trick and is what the
+//! original paper actually proves stability for.
+//!
 //! `blended` defaults to α = 0.5, which is equivalent to flipping a fair
 //! coin between `population` and `built` per draw (the two are the same
 //! marginal distribution). Normalising each signal by its global sum
@@ -203,10 +218,14 @@ impl Sampler {
         weight_col: &'static str,
         where_extra: &'static str,
     ) -> Result<(f32, f32, f32, f32), sqlx::Error> {
+        // Log-space Efraimidis-Spirakis: ln(1 - random()) / weight DESC
+        // is the monotone equivalent of random() ^ (1 / weight) DESC, but
+        // never underflows double precision for small weights. See the
+        // module-level doc.
         let sql = format!(
             "SELECT lat, lon, pop, built_volume FROM grid_cells \
              WHERE cell_size_km = $1 AND epoch = $2 AND {where_extra} \
-             ORDER BY random() ^ (1.0 / {weight_col}::double precision) DESC \
+             ORDER BY ln(1.0 - random()) / {weight_col}::double precision DESC \
              LIMIT 1"
         );
         sqlx::query_as(&sql)
@@ -218,8 +237,11 @@ impl Sampler {
 
     /// Efraimidis-Spirakis on the normalised blended weight
     /// `α · built/total_built + (1-α) · pop/total_pop`. Filters out
-    /// rows with zero blended weight so the `random() ^ (1/0)` edge
-    /// case never happens.
+    /// rows with zero blended weight so the `ln(random()) / 0` edge
+    /// case never happens. Uses the log-space form (see module doc)
+    /// because normalised weights are ~1e-11..1e-4 — the naive
+    /// `random() ^ (1/w)` would underflow double precision for every
+    /// row and Postgres would raise `value out of range: underflow`.
     async fn query_blended(&self, alpha: f64) -> Result<(f32, f32, f32, f32), sqlx::Error> {
         let alpha = alpha.clamp(0.0, 1.0);
         let pop_coeff = (1.0 - alpha) / self.total_pop;
@@ -228,9 +250,9 @@ impl Sampler {
             "SELECT lat, lon, pop, built_volume FROM grid_cells \
              WHERE cell_size_km = $1 AND epoch = $2 \
                AND ($3 * pop::double precision + $4 * built_volume::double precision) > 0 \
-             ORDER BY random() ^ (1.0 / \
+             ORDER BY ln(1.0 - random()) / \
                 ($3 * pop::double precision + $4 * built_volume::double precision) \
-             ) DESC LIMIT 1",
+                DESC LIMIT 1",
         )
         .bind(self.cell_size_km as i32)
         .bind(self.epoch)

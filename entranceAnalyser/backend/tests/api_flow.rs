@@ -216,6 +216,50 @@ async fn invalid_alpha_returns_400(#[case] qs: &str) {
     db.cleanup().await.ok();
 }
 
+/// Regression for the "value out of range: underflow" failure observed
+/// on a real 5.5 M-cell grid: normalised blended weights are O(1e-11)
+/// per cell, which made the naive `random() ^ (1/weight)` underflow
+/// double precision for every row. The log-space form must survive this
+/// scale. Seeds just one cell but with realistic totals, so the
+/// computed per-row weight is tiny and would have exploded the old SQL.
+#[tokio::test]
+async fn blended_survives_tiny_normalised_weights() {
+    let Some(db) = common::pg_or_skip().await else { return };
+    // Totals mirror the production scale (7.8e9 people, 2e18 m³ built);
+    // max_pop / max_built match the real 2020 epoch figures so the
+    // single seeded cell carries realistic relative mass.
+    sqlx::query(
+        "INSERT INTO grid_meta \
+         (cell_size_km, epoch, max_pop, max_built_volume, total_pop, total_built) \
+         VALUES (10, 2020, 5693038, 429496729600, 7840952542, 1996200251634214400)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO grid_cells \
+         (cell_size_km, epoch, lat, lon, pop, built_volume, geom) \
+         VALUES (10, 2020, 45.5, -73.5, 1.0, 1.0, \
+                 ST_SetSRID(ST_MakePoint(-73.5, 45.5), 4326))",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let app = build_router(db.pool.clone()).await;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/bbox/random?strategy=blended")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    db.cleanup().await.ok();
+}
+
 #[tokio::test]
 async fn random_without_grid_returns_503() {
     let Some(db) = common::pg_or_skip().await else { return };

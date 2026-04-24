@@ -44,12 +44,16 @@ is `blended` with `α=0.5`.
 | `blended`    | `α · built_i / Σ built + (1-α) · pop_i / Σ pop`          | recommended: both signals, per-draw 50/50 at α=0.5         |
 
 Under the hood each non-uniform strategy runs
-**Efraimidis–Spirakis weighted reservoir sampling**
-(`ORDER BY random() ^ (1 / weight) DESC LIMIT 1`), giving an exact
-probability-proportional-to-size draw in one query. `built` and
-`blended` need a grid built with `--built-volume`; if the column is
-all-zero the backend returns 503 with a rebuild hint instead of
-silently returning uniform draws.
+**Efraimidis–Spirakis weighted reservoir sampling** in log space —
+`ORDER BY ln(1 - random()) / weight DESC LIMIT 1`. That's the
+numerically stable, monotonically-equivalent form of
+`random() ^ (1 / weight) DESC`: at our scale normalised weights are
+`O(1e-9)` per cell, so `1 / weight ≈ 1e9` and `random() ^ 1e9`
+underflows `double precision` for every row (Postgres raises
+`value out of range: underflow`). `built` and `blended` need a grid
+built with `--built-volume`; if the column is all-zero the backend
+returns 503 with a rebuild hint instead of silently returning uniform
+draws.
 
 ## Bootstrapping
 
@@ -196,10 +200,12 @@ on machines without a live database.
 ## Sampling performance note
 
 Uniform draws use `ORDER BY random() LIMIT 1`; the weighted strategies
-use `ORDER BY random() ^ (1 / weight) DESC LIMIT 1`
-(Efraimidis–Spirakis). Both are full seq-scans of `grid_cells` — at
-our scale (single-operator dev tool, ~800k rows at 10 km) that lands
-around 100–200 ms per draw, comfortably under the human click loop.
+use `ORDER BY ln(1 - random()) / weight DESC LIMIT 1` (log-space
+Efraimidis–Spirakis — see the warning above the strategies table for
+why the naive `^ (1 / weight)` form underflows). Both are full
+seq-scans of `grid_cells` — at our scale (single-operator dev tool,
+~800 k rows at 10 km with both rasters) that lands around 30–80 ms
+per draw, comfortably under the human click loop.
 If the workload ever becomes concurrent, cache a cumulative-sum column
 + index and binary-search against `random() · Σ weight` — that's a
 one-query change in [`src/sampler.rs`](backend/src/sampler.rs).
