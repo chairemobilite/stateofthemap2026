@@ -1,0 +1,458 @@
+//! Overpass API client for the POI-pick analysis step.
+//!
+//! Given a bbox and a [`PoiTagConfig`], query Overpass for every
+//! matching OSM feature in one shot, then annotate each returned
+//! element with the group it matched (resolved client-side via the
+//! same `PoiTagConfig` to avoid emitting N separate queries).
+//!
+//! Only the public methods that the HTTP handler needs are exposed
+//! here; the QL builder is also public so the handler's integration
+//! tests can assert on its output without hitting the network.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+use crate::bbox::Bbox;
+use crate::poi_config::PoiTagConfig;
+
+/// OSM feature kind. Mirrors the three values Overpass emits in the
+/// `type` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OsmType {
+    Node,
+    Way,
+    Relation,
+}
+
+impl OsmType {
+    fn from_overpass(raw: &str) -> Option<Self> {
+        match raw {
+            "node" => Some(Self::Node),
+            "way" => Some(Self::Way),
+            "relation" => Some(Self::Relation),
+            _ => None,
+        }
+    }
+}
+
+/// One picked POI, tagged with the group it matched in
+/// `config/poi_tags.yml`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Poi {
+    pub osm_type: OsmType,
+    pub osm_id: i64,
+    /// `[lon, lat]` — GeoJSON order, matches [`Bbox::center`].
+    pub center: [f64; 2],
+    pub tags: BTreeMap<String, String>,
+    /// Name of the matching group from `poi_tags.yml`.
+    pub group: String,
+}
+
+/// Default connect + read timeout. Overpass caps server-side at 25 s
+/// by default; we give a small cushion for the round-trip.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Matches the `[timeout:N]` setting embedded in every QL query.
+const OVERPASS_QUERY_TIMEOUT_S: u32 = 25;
+
+/// HTTP client wired to an Overpass endpoint.
+#[derive(Debug, Clone)]
+pub struct OverpassClient {
+    http: reqwest::Client,
+    url: String,
+}
+
+impl OverpassClient {
+    /// Build a client pointing at an Overpass `/api/interpreter`
+    /// endpoint. The URL is taken verbatim from config (env-var
+    /// `OVERPASS_URL`), so the operator controls which mirror to use.
+    pub fn new(url: impl Into<String>) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            // Identify the tool in Overpass's logs — the public
+            // instance asks integrators to send a descriptive UA.
+            .user_agent(concat!(
+                "entrance-analyser-backend/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://github.com/chairemobilite/stateofthemap2026)"
+            ))
+            .build()
+            .expect("reqwest::Client::build with static settings is infallible");
+        Self {
+            http,
+            url: url.into(),
+        }
+    }
+
+    /// Fetch every POI inside `bbox` that matches any expression in
+    /// `config`. Returned POIs are annotated with their group via
+    /// [`PoiTagConfig::group_for_tags`]; features whose tags match
+    /// none of the groups (shouldn't happen since Overpass filters
+    /// from the same expressions) are dropped.
+    pub async fn fetch_pois(
+        &self,
+        bbox: &Bbox,
+        config: &PoiTagConfig,
+    ) -> Result<Vec<Poi>, OverpassError> {
+        let ql = build_query(bbox, config);
+        let response = self
+            .http
+            .post(&self.url)
+            .form(&[("data", ql)])
+            .send()
+            .await
+            .map_err(OverpassError::Network)?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(OverpassError::Http {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let parsed: OverpassResponse = response.json().await.map_err(OverpassError::Decode)?;
+        Ok(parsed
+            .elements
+            .into_iter()
+            .filter_map(|raw| raw.into_poi(config))
+            .collect())
+    }
+}
+
+/// Build the Overpass QL query for one bbox and every group in
+/// `config`. Public so tests can assert on the output without a
+/// network round-trip.
+pub fn build_query(bbox: &Bbox, config: &PoiTagConfig) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    writeln!(
+        &mut out,
+        "[out:json][timeout:{OVERPASS_QUERY_TIMEOUT_S}][bbox:{s},{w},{n},{e}];",
+        s = bbox.south,
+        w = bbox.west,
+        n = bbox.north,
+        e = bbox.east,
+    )
+    .unwrap();
+    out.push_str("(\n");
+    for exprs in config.groups.values() {
+        for expr in exprs {
+            // `nwr` queries nodes + ways + relations in a single
+            // clause (Overpass QL shortcut).
+            match &expr.value {
+                None => writeln!(&mut out, "    nwr[{:?}];", expr.key).unwrap(),
+                Some(v) => writeln!(&mut out, "    nwr[{:?}={:?}];", expr.key, v).unwrap(),
+            }
+        }
+    }
+    out.push_str(");\nout center tags;\n");
+    out
+}
+
+// ---------- raw response types (crate-private) ----------
+
+#[derive(Debug, Deserialize)]
+struct OverpassResponse {
+    elements: Vec<RawElement>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawElement {
+    #[serde(rename = "type")]
+    osm_type: String,
+    id: i64,
+    #[serde(default)]
+    lat: Option<f64>,
+    #[serde(default)]
+    lon: Option<f64>,
+    /// Present for ways/relations when the query asks for `out center`.
+    #[serde(default)]
+    center: Option<LatLon>,
+    #[serde(default)]
+    tags: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LatLon {
+    lat: f64,
+    lon: f64,
+}
+
+impl RawElement {
+    /// Turn a raw Overpass element into a [`Poi`], dropping elements
+    /// that lack a usable center or whose tags match no group.
+    fn into_poi(self, config: &PoiTagConfig) -> Option<Poi> {
+        let osm_type = OsmType::from_overpass(&self.osm_type)?;
+        let group = config.group_for_tags(&self.tags)?.to_string();
+        let center = match (self.lat, self.lon, self.center) {
+            // Nodes: top-level `lat`/`lon` are authoritative.
+            (Some(lat), Some(lon), _) => [lon, lat],
+            // Ways / relations: the requested `out center` shortcut.
+            (_, _, Some(c)) => [c.lon, c.lat],
+            _ => return None,
+        };
+        Some(Poi {
+            osm_type,
+            osm_id: self.id,
+            center,
+            tags: self.tags,
+            group,
+        })
+    }
+}
+
+// ---------- errors ----------
+
+/// Every failure mode `fetch_pois` can hit.
+#[derive(Debug)]
+pub enum OverpassError {
+    /// Connection error, TLS failure, timeout, DNS — all reqwest
+    /// transport failures collapse here.
+    Network(reqwest::Error),
+    /// Overpass returned a non-2xx HTTP status. `body` carries the
+    /// server's response so the HTTP layer can log it.
+    Http { status: u16, body: String },
+    /// 2xx response but the body did not deserialize into the
+    /// documented Overpass JSON shape.
+    Decode(reqwest::Error),
+}
+
+impl std::fmt::Display for OverpassError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Network(e) => write!(f, "Overpass transport failure: {e}"),
+            Self::Http { status, body } => {
+                let excerpt: String = body.chars().take(200).collect();
+                write!(f, "Overpass HTTP {status}: {excerpt}")
+            }
+            Self::Decode(e) => write!(f, "Overpass response decode failure: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for OverpassError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::poi_config::PoiTagConfig;
+    use uuid::Uuid;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn sample_config(yaml: &str) -> PoiTagConfig {
+        PoiTagConfig::from_yaml_str(yaml).unwrap()
+    }
+
+    fn sample_bbox() -> Bbox {
+        Bbox {
+            id: Uuid::nil(),
+            west: -73.60,
+            south: 45.50,
+            east: -73.50,
+            north: 45.60,
+            center: [-73.55, 45.55],
+            cell_size_km: 10,
+            population: 0.0,
+            density_per_km2: 0.0,
+            max_density_ratio: 0.0,
+            built_volume: 0.0,
+            max_built_volume_ratio: 0.0,
+        }
+    }
+
+    #[test]
+    fn query_includes_bbox_and_every_group_expression() {
+        let cfg = sample_config(
+            "groups:\n    shops:\n        - shop=*\n    \
+             public_transport:\n        - highway=bus_stop\n        - railway=tram_stop\n",
+        );
+        let ql = build_query(&sample_bbox(), &cfg);
+        assert!(
+            ql.contains("[bbox:45.5,-73.6,45.6,-73.5]"),
+            "missing bbox: {ql}"
+        );
+        assert!(ql.contains("nwr[\"shop\"];"), "missing wildcard line: {ql}");
+        assert!(
+            ql.contains("nwr[\"highway\"=\"bus_stop\"];"),
+            "missing exact match line: {ql}"
+        );
+        assert!(
+            ql.contains("nwr[\"railway\"=\"tram_stop\"];"),
+            "missing second exact match: {ql}"
+        );
+        assert!(ql.contains("out center tags;"), "missing out clause: {ql}");
+    }
+
+    fn make_response(elements: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "version": 0.6,
+            "generator": "Overpass API mock",
+            "elements": elements,
+        })
+    }
+
+    #[tokio::test]
+    async fn parses_node_way_relation_elements_and_assigns_groups() {
+        let server = MockServer::start().await;
+        let body = make_response(serde_json::json!([
+            {
+                "type": "node",
+                "id": 101,
+                "lat": 45.55,
+                "lon": -73.55,
+                "tags": {"shop": "bakery", "name": "Test Bakery"}
+            },
+            {
+                "type": "way",
+                "id": 202,
+                "center": {"lat": 45.56, "lon": -73.54},
+                "tags": {"highway": "bus_stop"}
+            },
+            {
+                "type": "relation",
+                "id": 303,
+                "center": {"lat": 45.57, "lon": -73.53},
+                "tags": {"railway": "tram_stop"}
+            },
+        ]));
+        Mock::given(method("POST"))
+            .and(path("/api/interpreter"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let cfg = sample_config(
+            "groups:\n    shops:\n        - shop=*\n    \
+             public_transport:\n        - highway=bus_stop\n        - railway=tram_stop\n",
+        );
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let pois = client.fetch_pois(&sample_bbox(), &cfg).await.unwrap();
+
+        assert_eq!(pois.len(), 3);
+        assert_eq!(pois[0].osm_type, OsmType::Node);
+        assert_eq!(pois[0].osm_id, 101);
+        assert_eq!(pois[0].group, "shops");
+        assert_eq!(pois[0].center, [-73.55, 45.55]);
+        assert_eq!(pois[1].osm_type, OsmType::Way);
+        assert_eq!(pois[1].group, "public_transport");
+        assert_eq!(pois[2].osm_type, OsmType::Relation);
+        assert_eq!(pois[2].group, "public_transport");
+    }
+
+    #[tokio::test]
+    async fn drops_elements_matching_an_exception() {
+        // The shipped YAML treats `shop=vacant` as a non-POI; the
+        // overpass client must round-trip that semantics via
+        // `PoiTagConfig::group_for_tags`.
+        let server = MockServer::start().await;
+        let body = make_response(serde_json::json!([
+            {"type": "node", "id": 10, "lat": 45.55, "lon": -73.55,
+             "tags": {"shop": "bakery"}},
+            {"type": "node", "id": 11, "lat": 45.56, "lon": -73.55,
+             "tags": {"shop": "vacant"}},
+        ]));
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let cfg = sample_config(
+            "groups:\n    shops:\n        - shop=*\nexceptions:\n    - shop=vacant\n",
+        );
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let pois = client.fetch_pois(&sample_bbox(), &cfg).await.unwrap();
+        assert_eq!(pois.len(), 1, "vacant storefront must be dropped");
+        assert_eq!(pois[0].osm_id, 10);
+    }
+
+    #[tokio::test]
+    async fn drops_elements_without_center_or_matching_group() {
+        let server = MockServer::start().await;
+        let body = make_response(serde_json::json!([
+            // No lat/lon and no center -> drop.
+            {"type": "way", "id": 1, "tags": {"shop": "bakery"}},
+            // Tags match no group -> drop.
+            {"type": "node", "id": 2, "lat": 45.55, "lon": -73.55,
+             "tags": {"amenity": "cafe"}},
+            // Valid.
+            {"type": "node", "id": 3, "lat": 45.56, "lon": -73.54,
+             "tags": {"shop": "supermarket"}},
+        ]));
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let cfg = sample_config("groups:\n    shops:\n        - shop=*\n");
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let pois = client.fetch_pois(&sample_bbox(), &cfg).await.unwrap();
+        assert_eq!(pois.len(), 1);
+        assert_eq!(pois[0].osm_id, 3);
+    }
+
+    #[tokio::test]
+    async fn empty_elements_produces_empty_vec() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(make_response(serde_json::json!([]))),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = sample_config("groups:\n    shops:\n        - shop=*\n");
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let pois = client.fetch_pois(&sample_bbox(), &cfg).await.unwrap();
+        assert!(pois.is_empty());
+    }
+
+    #[tokio::test]
+    async fn non_2xx_surfaces_http_error_with_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(504).set_body_string("rate limited"))
+            .mount(&server)
+            .await;
+
+        let cfg = sample_config("groups:\n    shops:\n        - shop=*\n");
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let err = client
+            .fetch_pois(&sample_bbox(), &cfg)
+            .await
+            .expect_err("504 must surface as an error");
+        match err {
+            OverpassError::Http { status, body } => {
+                assert_eq!(status, 504);
+                assert!(body.contains("rate limited"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_json_surfaces_decode_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string("{not: json"),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = sample_config("groups:\n    shops:\n        - shop=*\n");
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let err = client
+            .fetch_pois(&sample_bbox(), &cfg)
+            .await
+            .expect_err("malformed JSON must surface as an error");
+        assert!(matches!(err, OverpassError::Decode(_)), "got {err:?}");
+    }
+}
