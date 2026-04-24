@@ -128,6 +128,16 @@ signal crosses its `--min-population` / `--min-built-volume`
 threshold (defaults `0.5` / `0.5`) — so purely-industrial cells land
 in the grid even with zero residents.
 
+Each raster's `GDAL_NODATA` sentinel (tag 42113) is read from the
+TIFF header and pixels matching it are skipped *before* being cast
+to `f32`. This matters for GHS-BUILT-V, whose nodata value is
+`0xFFFFFFFF` — if we let it through the cast, it rounds up to
+exactly `2^32` and 100 ocean pixels sum to `4.3 × 10¹¹` m³ of
+phantom built volume per 10 km cell, pulling the `built` / `blended`
+samplers into the middle of the Pacific. See
+[`backend/src/geotiff_pop.rs`](backend/src/geotiff_pop.rs) →
+`decoding_to_f32` for the filter.
+
 The binary reads `PG_CONNECTION_STRING_PREFIX + PG_DATABASE` from `.env`
 by default; pass `--database-url` to override. Writes are idempotent
 per `(cell_size_km, epoch)`: rebuilding with the same parameters

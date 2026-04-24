@@ -14,8 +14,11 @@
 
 /// In-progress aggregation of native pixels into super-cells.
 ///
-/// Negative pixels and non-finite pixels are treated as 0 — GHS-POP uses a
-/// negative NoData sentinel for the ocean mask.
+/// Non-finite pixels (including the `NaN`s that `geotiff_pop`'s
+/// [`decoding_to_f32`] emits for integer-typed nodata sentinels like
+/// GHS-BUILT-V's `0xFFFFFFFF`) and non-positive pixels (GHS-POP's
+/// `-200` ocean mask, legitimate zeros) are skipped. Anything above
+/// zero is added to the super-cell's running sum.
 pub struct Aggregator {
     /// Width of the super-cell grid in cells.
     pub out_width: usize,

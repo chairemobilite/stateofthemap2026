@@ -45,6 +45,15 @@ pub struct PopReader<R: std::io::Read + Seek> {
     pub width: u32,
     pub height: u32,
     pub geotransform: GeoTransform,
+    /// Value published by the raster as its "no data" sentinel
+    /// (TIFF tag 42113 / `GDAL_NODATA`). `None` when the tag is absent.
+    ///
+    /// Kept as `f64` because GHS rasters ship with values like `-200`
+    /// (GHS-POP, Float64) and `4294967295` (GHS-BUILT-V, UInt32) — both
+    /// fit exactly in f64 but the UInt32 one rounds to `2^32` if cast
+    /// straight to f32, which is why per-type integer comparison in
+    /// [`decoding_to_f32`] happens *before* the cast.
+    pub nodata: Option<f64>,
 }
 
 impl PopReader<BufReader<File>> {
@@ -75,7 +84,16 @@ impl<R: std::io::Read + Seek> PopReader<R> {
             pixel_size_y: scale[1],
         };
 
-        Ok(Self { decoder, width, height, geotransform })
+        // GDAL writes the nodata sentinel as an ASCII TIFF tag (42113).
+        // Both GHS rasters set it (`-200` for POP, `4294967295` for
+        // BUILT-V); missing tag is rare but benign — we just lose the
+        // filter.
+        let nodata = decoder
+            .get_tag_ascii_string(Tag::Unknown(42113))
+            .ok()
+            .and_then(|s| s.trim().parse::<f64>().ok());
+
+        Ok(Self { decoder, width, height, geotransform, nodata })
     }
 
     /// Native pixel size in kilometres (assumes square pixels in metres).
@@ -119,7 +137,7 @@ impl<R: std::io::Read + Seek> PopReader<R> {
             let n_pixels = (w as usize) * (h as usize);
             buf_f32.clear();
             buf_f32.reserve(n_pixels);
-            decoding_to_f32(&chunk, n_pixels, &mut buf_f32)?;
+            decoding_to_f32(&chunk, n_pixels, self.nodata, &mut buf_f32)?;
 
             on_chunk(origin_x as usize, origin_y as usize, w as usize, h as usize, &buf_f32);
         }
@@ -130,18 +148,74 @@ impl<R: std::io::Read + Seek> PopReader<R> {
 /// Convert the first `n` pixels of `chunk` into `f32` and append them to
 /// `out`. Errors out on multi-sample / non-numeric chunk types — GHS-POP is
 /// always single-sample numeric.
+///
+/// Pixels that match the per-raster `nodata` sentinel are emitted as
+/// `f32::NAN` so downstream aggregators filter them out via
+/// `is_finite()`. The comparison is done in the native integer type
+/// *before* the `as f32` cast, because e.g. `0xFFFFFFFF as f32` rounds
+/// up to `2^32` — far from zero, so without this pre-cast check the
+/// aggregator would happily sum ocean tiles as ~`4.3e11 m³` of built
+/// volume. Ask us how we know.
 fn decoding_to_f32(
     chunk: &DecodingResult,
     n: usize,
+    nodata: Option<f64>,
     out: &mut Vec<f32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    /// Narrow `nodata` to the exact integer in `T::MIN..=T::MAX` it
+    /// represents, or `None` if the sentinel can't be expressed in
+    /// that integer type (which means no raw pixel can match it).
+    fn as_int<T>(nodata: Option<f64>, min: f64, max: f64, cast: fn(f64) -> T) -> Option<T> {
+        nodata.and_then(|n| {
+            if n.is_finite() && n.fract() == 0.0 && (min..=max).contains(&n) {
+                Some(cast(n))
+            } else {
+                None
+            }
+        })
+    }
     match chunk {
-        DecodingResult::F32(v) => out.extend(v.iter().take(n).copied()),
-        DecodingResult::F64(v) => out.extend(v.iter().take(n).map(|x| *x as f32)),
-        DecodingResult::U16(v) => out.extend(v.iter().take(n).map(|x| *x as f32)),
-        DecodingResult::U32(v) => out.extend(v.iter().take(n).map(|x| *x as f32)),
-        DecodingResult::I16(v) => out.extend(v.iter().take(n).map(|x| *x as f32)),
-        DecodingResult::I32(v) => out.extend(v.iter().take(n).map(|x| *x as f32)),
+        DecodingResult::F32(v) => {
+            let nd = nodata.map(|n| n as f32);
+            out.extend(v.iter().take(n).map(|&x| match nd {
+                Some(nd) if x == nd => f32::NAN,
+                _ => x,
+            }));
+        }
+        DecodingResult::F64(v) => {
+            out.extend(v.iter().take(n).map(|&x| match nodata {
+                Some(nd) if x == nd => f32::NAN,
+                _ => x as f32,
+            }));
+        }
+        DecodingResult::U16(v) => {
+            let nd = as_int::<u16>(nodata, 0.0, u16::MAX as f64, |x| x as u16);
+            out.extend(v.iter().take(n).map(|&x| match nd {
+                Some(nd) if x == nd => f32::NAN,
+                _ => x as f32,
+            }));
+        }
+        DecodingResult::U32(v) => {
+            let nd = as_int::<u32>(nodata, 0.0, u32::MAX as f64, |x| x as u32);
+            out.extend(v.iter().take(n).map(|&x| match nd {
+                Some(nd) if x == nd => f32::NAN,
+                _ => x as f32,
+            }));
+        }
+        DecodingResult::I16(v) => {
+            let nd = as_int::<i16>(nodata, i16::MIN as f64, i16::MAX as f64, |x| x as i16);
+            out.extend(v.iter().take(n).map(|&x| match nd {
+                Some(nd) if x == nd => f32::NAN,
+                _ => x as f32,
+            }));
+        }
+        DecodingResult::I32(v) => {
+            let nd = as_int::<i32>(nodata, i32::MIN as f64, i32::MAX as f64, |x| x as i32);
+            out.extend(v.iter().take(n).map(|&x| match nd {
+                Some(nd) if x == nd => f32::NAN,
+                _ => x as f32,
+            }));
+        }
         other => return Err(format!("unsupported pixel type: {other:?}").into()),
     }
     Ok(())
@@ -150,9 +224,49 @@ fn decoding_to_f32(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use std::io::Cursor;
-    use tiff::encoder::{colortype::Gray32Float, TiffEncoder};
+    use tiff::encoder::{
+        colortype::{Gray32, Gray32Float},
+        TiffEncoder,
+    };
     use tiff::tags::Tag;
+
+    /// Build a tiny one-strip TIFF and feed it back through [`PopReader`],
+    /// returning the flattened pixel stream. Writes the given
+    /// `GDAL_NODATA` string when `nodata` is `Some` so tests can cover
+    /// the "with sentinel" and "without sentinel" branches uniformly.
+    fn roundtrip_u32(pixels: &[u32], nodata: Option<&str>) -> Vec<f32> {
+        assert_eq!(pixels.len(), 4);
+        let mut buf = Cursor::new(Vec::<u8>::new());
+        {
+            let mut enc = TiffEncoder::new(&mut buf).unwrap();
+            let mut img = enc.new_image::<Gray32>(2, 2).unwrap();
+            img.encoder()
+                .write_tag(Tag::ModelPixelScaleTag, &[1000.0_f64, 1000.0, 0.0][..])
+                .unwrap();
+            img.encoder()
+                .write_tag(
+                    Tag::ModelTiepointTag,
+                    &[0.0_f64, 0.0, 0.0, 0.0, 0.0, 0.0][..],
+                )
+                .unwrap();
+            if let Some(s) = nodata {
+                img.encoder().write_tag(Tag::Unknown(42113), s).unwrap();
+            }
+            img.write_data(pixels).unwrap();
+        }
+        buf.set_position(0);
+        let mut reader = PopReader::from_reader(buf).unwrap();
+        let mut seen = Vec::<f32>::new();
+        reader
+            .for_each_pixel(|_, _, w, h, px| {
+                assert_eq!(px.len(), w * h);
+                seen.extend_from_slice(px);
+            })
+            .unwrap();
+        seen
+    }
 
     #[test]
     fn pixel_center_uses_top_left_corner_convention() {
@@ -168,6 +282,44 @@ mod tests {
         let (x2, y2) = gt.pixel_center(1.0, 1.0);
         assert_eq!(x2 - x, 1000.0);
         assert_eq!(y - y2, 1000.0);
+    }
+
+    #[rstest]
+    // Ocean-like UInt32 raster where every pixel carries the GHS-BUILT-V
+    // nodata sentinel `0xFFFFFFFF`. Without the nodata-aware decoder each
+    // pixel would cast to `2^32` as f32 — that's the "429,496,729,600 m³
+    // ocean concrete" bug this test locks down.
+    #[case::all_nodata(&[u32::MAX, u32::MAX, u32::MAX, u32::MAX], "4294967295", 4)]
+    // Mixed: half nodata, half real data.
+    #[case::mixed(&[u32::MAX, 42, u32::MAX, 7], "4294967295", 2)]
+    fn u32_pixels_matching_gdal_nodata_become_nan(
+        #[case] pixels: &[u32],
+        #[case] nodata_tag: &str,
+        #[case] expected_nan_count: usize,
+    ) {
+        let out = roundtrip_u32(pixels, Some(nodata_tag));
+        assert_eq!(out.len(), pixels.len());
+        let nan_count = out.iter().filter(|v| v.is_nan()).count();
+        assert_eq!(nan_count, expected_nan_count);
+        for (raw, decoded) in pixels.iter().zip(out.iter()) {
+            if *raw == u32::MAX {
+                assert!(decoded.is_nan(), "nodata pixel should decode to NaN");
+            } else {
+                assert_eq!(*decoded, *raw as f32);
+            }
+        }
+    }
+
+    /// When the TIFF has no `GDAL_NODATA` tag, the reader must keep
+    /// every pixel as-is (casting `u32::MAX` to `2^32` — which is the
+    /// bug-compatible behaviour for rasters that legitimately use the
+    /// full `u32` range, so we surface it rather than silently drop).
+    #[test]
+    fn u32_pixels_without_nodata_tag_pass_through() {
+        let pixels = [u32::MAX, 5, 10, 15];
+        let out = roundtrip_u32(&pixels, None);
+        assert!(!out.iter().any(|v| v.is_nan()));
+        assert_eq!(out[0], u32::MAX as f32); // = 2^32 after the cast
     }
 
     /// Round-trip a tiny synthetic Float32 GeoTIFF through the encoder and
