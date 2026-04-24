@@ -6,7 +6,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchRandomBbox, submitDecision, type Bbox, type Decision } from './api';
+import {
+    DEFAULT_STRATEGY,
+    fetchRandomBbox,
+    submitDecision,
+    type Bbox,
+    type Decision,
+    type Strategy,
+} from './api';
 
 export type SamplingStatus = 'loading' | 'idle' | 'error';
 
@@ -15,14 +22,18 @@ export interface SamplingState {
     keptCount: number;
     status: SamplingStatus;
     error: string | null;
+    strategy: Strategy;
+    setStrategy: (next: Strategy) => void;
     decide: (decision: Decision) => Promise<void>;
     skip: () => Promise<void>;
 }
 
 export interface UseSamplingOptions {
+    /** Initial strategy; defaults to the module-level `DEFAULT_STRATEGY`. */
+    initialStrategy?: Strategy;
     /** Override the API module, mostly for tests. */
-    fetchNext?: () => Promise<Bbox>;
-    submit?: (id: string, decision: Decision) => Promise<{ total_kept: number }>;
+    fetchNext?: (strategy: Strategy) => Promise<Bbox>;
+    submit?: (bbox: Bbox, decision: Decision) => Promise<{ total_kept: number }>;
 }
 
 /**
@@ -37,13 +48,13 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
     // Memoize the default callbacks so the effects below see stable
     // references when the caller does not override them.
     const fetchNext = useMemo(
-        () => options.fetchNext ?? (() => fetchRandomBbox()),
+        () => options.fetchNext ?? ((s: Strategy) => fetchRandomBbox(s)),
         [options.fetchNext],
     );
     const submit = useMemo(
         () =>
             options.submit ??
-            ((id: string, decision: Decision) => submitDecision(id, decision)),
+            ((bbox: Bbox, decision: Decision) => submitDecision(bbox, decision)),
         [options.submit],
     );
 
@@ -51,21 +62,31 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
     const [keptCount, setKeptCount] = useState(0);
     const [status, setStatus] = useState<SamplingStatus>('loading');
     const [error, setError] = useState<string | null>(null);
+    const [strategy, setStrategyState] = useState<Strategy>(
+        options.initialStrategy ?? DEFAULT_STRATEGY,
+    );
     // React 18+ StrictMode double-invokes effects in dev; this ref stops
-    // the initial fetch from firing twice.
+    // the initial fetch from firing twice. Tracking the last strategy
+    // we fetched with lets us re-fetch exactly once when the user picks
+    // a new one.
     const bootstrapped = useRef(false);
+    const lastFetchedStrategy = useRef<Strategy | null>(null);
 
-    const loadNext = useCallback(async () => {
-        setStatus('loading');
-        setError(null);
-        try {
-            setBbox(await fetchNext());
-            setStatus('idle');
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-            setStatus('error');
-        }
-    }, [fetchNext]);
+    const loadNext = useCallback(
+        async (withStrategy: Strategy = strategy) => {
+            setStatus('loading');
+            setError(null);
+            try {
+                setBbox(await fetchNext(withStrategy));
+                lastFetchedStrategy.current = withStrategy;
+                setStatus('idle');
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+                setStatus('error');
+            }
+        },
+        [fetchNext, strategy],
+    );
 
     const decide = useCallback(
         async (decision: Decision) => {
@@ -73,7 +94,7 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
             setStatus('loading');
             setError(null);
             try {
-                const reply = await submit(bbox.id, decision);
+                const reply = await submit(bbox, decision);
                 setKeptCount(reply.total_kept);
                 await loadNext();
             } catch (err) {
@@ -84,11 +105,28 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
         [bbox, loadNext, submit],
     );
 
+    const setStrategy = useCallback(
+        (next: Strategy) => {
+            setStrategyState(next);
+            void loadNext(next);
+        },
+        [loadNext],
+    );
+
     useEffect(() => {
         if (bootstrapped.current) return;
         bootstrapped.current = true;
-        void loadNext();
-    }, [loadNext]);
+        void loadNext(strategy);
+    }, [loadNext, strategy]);
 
-    return { bbox, keptCount, status, error, decide, skip: loadNext };
+    return {
+        bbox,
+        keptCount,
+        status,
+        error,
+        strategy,
+        setStrategy,
+        decide,
+        skip: () => loadNext(),
+    };
 }

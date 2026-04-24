@@ -8,7 +8,7 @@ import { useSampling } from './useSampling';
 
 function App() {
     const [basemapId, setBasemapId] = useState<BasemapId>(DEFAULT_BASEMAP_ID);
-    const { bbox, keptCount, status, error, decide, skip } = useSampling();
+    const { bbox, keptCount, status, error, strategy, setStrategy, decide, skip } = useSampling();
 
     return (
         <div className="app">
@@ -19,6 +19,8 @@ function App() {
                 keptCount={keptCount}
                 status={status}
                 error={error}
+                strategy={strategy}
+                onStrategyChange={setStrategy}
                 onDecide={decide}
                 onSkip={skip}
             />

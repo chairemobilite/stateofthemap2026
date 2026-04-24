@@ -6,8 +6,10 @@
 pub mod aggregate;
 pub mod api;
 pub mod bbox;
+pub mod config;
+pub mod db;
 pub mod geotiff_pop;
-pub mod grid;
+pub mod lzw_transcode;
 pub mod mollweide;
 pub mod sampler;
 pub mod storage;

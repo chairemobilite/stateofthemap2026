@@ -1,155 +1,187 @@
-//! Atomic JSON storage for kept bounding boxes.
+//! Postgres persistence for kept bboxes and their downstream analyses.
 //!
-//! The backing file is a single JSON document shaped like:
+//! Two concerns live here:
 //!
-//! ```json
-//! { "version": 1, "kept_bboxes": [ ... ] }
-//! ```
-//!
-//! Writes go through a temp file in the same directory and are swapped into
-//! place with `rename`, which is atomic on every POSIX filesystem we care
-//! about. This is a dev-only backend, so we keep the implementation small
-//! (no fsync, no file locks, no concurrent writers).
+//! * `kept_bboxes` — one row per Keep decision, with a PostGIS polygon
+//!   geometry alongside the raw coordinates so spatial queries work
+//!   out of the box.
+//! * `analyses` — generic key/value side-table keyed by `(bbox_id, kind)`.
+//!   The entrance-analyser pipeline fills this later; for now the HTTP
+//!   layer only exposes `PgStore::record_analysis` for future use.
 
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use chrono::{DateTime, Utc};
+use serde_json::Value as JsonValue;
+use sqlx::PgPool;
+use uuid::Uuid;
 
-use serde::{Deserialize, Serialize};
+use crate::bbox::{Bbox, KeptBbox};
 
-use crate::bbox::KeptBbox;
-
-/// Schema version — bumped if the on-disk format changes.
-pub const CURRENT_VERSION: u32 = 1;
-
-/// On-disk representation of the kept-bboxes file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct KeptFile {
-    pub version: u32,
-    pub kept_bboxes: Vec<KeptBbox>,
-}
-
-impl Default for KeptFile {
-    fn default() -> Self {
-        Self {
-            version: CURRENT_VERSION,
-            kept_bboxes: Vec::new(),
-        }
-    }
-}
-
-/// Cheap handle over the kept-bboxes JSON file. Clone-friendly so it can
-/// live inside the shared app state.
+/// Thin, clone-friendly handle over the shared Postgres pool.
 #[derive(Debug, Clone)]
-pub struct JsonStore {
-    path: PathBuf,
+pub struct PgStore {
+    pool: PgPool,
 }
 
-impl JsonStore {
-    /// Create a store pointing at `path`. The file itself does not need to
-    /// exist yet — `load` returns an empty `KeptFile` when it is missing.
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+impl PgStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
-    /// Read the file, or return the default (empty) document if it does
-    /// not exist yet.
-    pub fn load(&self) -> io::Result<KeptFile> {
-        match fs::read(&self.path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(KeptFile::default()),
-            Err(e) => Err(e),
-        }
+    /// Persist a bbox as kept. Returns the total number of kept bboxes
+    /// after the insert so the HTTP handler can echo that count back to
+    /// the UI in one round-trip.
+    pub async fn append(&self, bbox: Bbox) -> Result<i64, sqlx::Error> {
+        let polygon_wkt = polygon_wkt(&bbox);
+        sqlx::query(
+            "INSERT INTO kept_bboxes (id, west, south, east, north, \
+                                      center_lon, center_lat, cell_size_km, \
+                                      population, density_per_km2, max_density_ratio, \
+                                      built_volume, max_built_volume_ratio, \
+                                      geom) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+                     ST_GeomFromText($14, 4326))",
+        )
+        .bind(bbox.id)
+        .bind(bbox.west)
+        .bind(bbox.south)
+        .bind(bbox.east)
+        .bind(bbox.north)
+        .bind(bbox.center[0])
+        .bind(bbox.center[1])
+        .bind(bbox.cell_size_km as i32)
+        .bind(bbox.population)
+        .bind(bbox.density_per_km2)
+        .bind(bbox.max_density_ratio)
+        .bind(bbox.built_volume)
+        .bind(bbox.max_built_volume_ratio)
+        .bind(polygon_wkt)
+        .execute(&self.pool)
+        .await?;
+        self.count().await
     }
 
-    /// Append a new kept bbox and atomically persist the updated file.
-    /// Returns the total number of kept bboxes after the append.
-    pub fn append(&self, entry: KeptBbox) -> io::Result<usize> {
-        let mut file = self.load()?;
-        file.kept_bboxes.push(entry);
-        let total = file.kept_bboxes.len();
-        self.write_atomic(&file)?;
-        Ok(total)
+    /// All kept bboxes, ordered by insertion time (oldest first) so the
+    /// UI can render a stable chronological list.
+    pub async fn load(&self) -> Result<Vec<KeptBbox>, sqlx::Error> {
+        let rows: Vec<KeptRow> = sqlx::query_as::<_, KeptRow>(
+            "SELECT id, west, south, east, north, center_lon, center_lat, \
+                    cell_size_km, population, density_per_km2, max_density_ratio, \
+                    built_volume, max_built_volume_ratio, kept_at \
+             FROM kept_bboxes ORDER BY kept_at ASC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(KeptRow::into_kept).collect())
     }
 
-    fn write_atomic(&self, file: &KeptFile) -> io::Result<()> {
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent)?;
-        let json = serde_json::to_vec_pretty(file)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-        tmp.write_all(&json)?;
-        tmp.flush()?;
-        tmp.persist(&self.path).map_err(|e| e.error)?;
+    /// Number of rows in `kept_bboxes`.
+    pub async fn count(&self) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM kept_bboxes")
+            .fetch_one(&self.pool)
+            .await
+    }
+
+    /// Upsert a per-bbox analysis record. Re-recording the same
+    /// `(bbox_id, kind)` pair replaces the previous value, which is the
+    /// behaviour most analysis pipelines want when they re-run.
+    pub async fn record_analysis(
+        &self,
+        bbox_id: Uuid,
+        kind: &str,
+        value: Option<f64>,
+        payload: Option<JsonValue>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO analyses (bbox_id, kind, value, payload) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (bbox_id, kind) DO UPDATE \
+             SET value = EXCLUDED.value, payload = EXCLUDED.payload, created_at = now()",
+        )
+        .bind(bbox_id)
+        .bind(kind)
+        .bind(value)
+        .bind(payload)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
+}
+
+/// Flat row shape returned by `sqlx::query_as!` — the PostGIS `geom`
+/// column is derivable from the scalar columns, so we omit it on reads.
+#[derive(sqlx::FromRow)]
+struct KeptRow {
+    id: Uuid,
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+    center_lon: f64,
+    center_lat: f64,
+    cell_size_km: i32,
+    population: f64,
+    density_per_km2: f64,
+    max_density_ratio: f64,
+    built_volume: f64,
+    max_built_volume_ratio: f64,
+    kept_at: DateTime<Utc>,
+}
+
+impl KeptRow {
+    fn into_kept(self) -> KeptBbox {
+        KeptBbox {
+            bbox: Bbox {
+                id: self.id,
+                west: self.west,
+                south: self.south,
+                east: self.east,
+                north: self.north,
+                center: [self.center_lon, self.center_lat],
+                cell_size_km: self.cell_size_km as u32,
+                population: self.population,
+                density_per_km2: self.density_per_km2,
+                max_density_ratio: self.max_density_ratio,
+                built_volume: self.built_volume,
+                max_built_volume_ratio: self.max_built_volume_ratio,
+            },
+            kept_at: self.kept_at,
+        }
+    }
+}
+
+/// Format a closed rectangle WKT (`POLYGON((...))`) for the given bbox.
+/// WKT uses `lon lat` ordering.
+fn polygon_wkt(b: &Bbox) -> String {
+    format!(
+        "POLYGON(({w} {s}, {e} {s}, {e} {n}, {w} {n}, {w} {s}))",
+        w = b.west, s = b.south, e = b.east, n = b.north,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bbox::random_bbox;
-    use crate::grid::{Cell, GridFile};
-    use crate::sampler::Sampler;
-    use chrono::Utc;
-    use rstest::rstest;
-    use tempfile::tempdir;
-
-    fn sample_kept(lon: f64, lat: f64) -> KeptBbox {
-        let sampler = Sampler::new(GridFile::new(
-            10,
-            2020,
-            vec![Cell { lat: lat as f32, lon: lon as f32, pop: 1234.0 }],
-        ))
-        .unwrap();
-        KeptBbox {
-            bbox: random_bbox(&sampler),
-            kept_at: Utc::now(),
-        }
-    }
+    use uuid::Uuid;
 
     #[test]
-    fn load_missing_file_returns_empty_document() {
-        let dir = tempdir().unwrap();
-        let store = JsonStore::new(dir.path().join("kept_bboxes.json"));
-        let file = store.load().unwrap();
-        assert_eq!(file.version, CURRENT_VERSION);
-        assert!(file.kept_bboxes.is_empty());
-    }
-
-    #[rstest]
-    #[case(&[(-73.555, 45.525)])]
-    #[case(&[(-73.555, 45.525), (2.35, 48.85)])]
-    #[case(&[(0.0, 0.0), (139.69, 35.68), (-46.63, -23.55)])]
-    fn append_then_load_roundtrips(#[case] centers: &[(f64, f64)]) {
-        let dir = tempdir().unwrap();
-        let store = JsonStore::new(dir.path().join("kept_bboxes.json"));
-
-        let mut expected = Vec::new();
-        for (i, (lon, lat)) in centers.iter().enumerate() {
-            let entry = sample_kept(*lon, *lat);
-            expected.push(entry.clone());
-            let total = store.append(entry).unwrap();
-            assert_eq!(total, i + 1);
-        }
-
-        let reloaded = store.load().unwrap();
-        assert_eq!(reloaded.version, CURRENT_VERSION);
-        assert_eq!(reloaded.kept_bboxes.len(), expected.len());
-        // Metadata (id, center, kept_at) must match exactly; these are either
-        // user-supplied or UUID/timestamp strings that never lose precision.
-        for (got, want) in reloaded.kept_bboxes.iter().zip(&expected) {
-            assert_eq!(got.bbox.id, want.bbox.id);
-            assert_eq!(got.bbox.center, want.bbox.center);
-            assert_eq!(got.kept_at, want.kept_at);
-        }
-        // A second load must be bit-identical to the first: once the data is
-        // on disk, roundtripping it through JSON is the fixed point. That's
-        // the real contract of the storage layer — the initial in-memory
-        // floats can differ from the on-disk floats by one ULP because
-        // serde_json's formatter picks the shortest roundtrip string.
-        let reloaded_again = store.load().unwrap();
-        assert_eq!(reloaded_again, reloaded);
+    fn polygon_wkt_closes_the_ring() {
+        let b = Bbox {
+            id: Uuid::nil(),
+            west: -73.6,
+            south: 45.5,
+            east: -73.5,
+            north: 45.6,
+            center: [-73.55, 45.55],
+            cell_size_km: 10,
+            population: 0.0,
+            density_per_km2: 0.0,
+            max_density_ratio: 0.0,
+            built_volume: 0.0,
+            max_built_volume_ratio: 0.0,
+        };
+        assert_eq!(
+            polygon_wkt(&b),
+            "POLYGON((-73.6 45.5, -73.5 45.5, -73.5 45.6, -73.6 45.6, -73.6 45.5))",
+        );
     }
 }

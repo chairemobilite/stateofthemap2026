@@ -13,6 +13,24 @@ jobs:
     defaults:
       run:
         working-directory: entranceAnalyser
+    services:
+      postgres:
+        # PostGIS-enabled Postgres so ST_* functions work out of the box.
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      PG_CONNECTION_STRING_PREFIX: postgres://postgres@localhost:5432/
+      PG_DATABASE: entrance_analyser
+      PG_DATABASE_TEST: entrance_analyser_test
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +50,13 @@ jobs:
 
       - name: cargo check
         run: cargo check --all-targets
+
+      # Uses the same helper documented in entranceAnalyser/README.md so
+      # CI and local bootstrap go through one code path. Idempotent:
+      # the command no-ops if the databases already exist on a cached
+      # service container.
+      - name: Provision application and test databases
+        run: cargo run --quiet --bin entrance-analyser-ensure-db
 
       - name: cargo test
         run: cargo test --all-targets

@@ -15,6 +15,8 @@ export function makeBbox(overrides: Partial<Bbox> = {}): Bbox {
         population: 12_500,
         density_per_km2: 125,
         max_density_ratio: 0.05,
+        built_volume: 500_000,
+        max_built_volume_ratio: 0.25,
         ...overrides,
     };
 }

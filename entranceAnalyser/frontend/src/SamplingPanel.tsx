@@ -3,7 +3,8 @@
 //! Pure presentational component driven by `useSampling`'s output so the
 //! UI can be unit-tested without the API or the map.
 
-import type { Bbox, Decision } from './api';
+import type { Bbox, Decision, Strategy } from './api';
+import { StrategySelector } from './StrategySelector';
 import type { SamplingStatus } from './useSampling';
 
 export interface SamplingPanelProps {
@@ -11,6 +12,8 @@ export interface SamplingPanelProps {
     keptCount: number;
     status: SamplingStatus;
     error: string | null;
+    strategy: Strategy;
+    onStrategyChange: (next: Strategy) => void;
     onDecide: (decision: Decision) => void;
     onSkip: () => void;
 }
@@ -37,12 +40,16 @@ export function SamplingPanel({
     keptCount,
     status,
     error,
+    strategy,
+    onStrategyChange,
     onDecide,
     onSkip,
 }: SamplingPanelProps) {
     const busy = status === 'loading';
     return (
         <aside className="sampling-panel" aria-label="Bbox sampling">
+            <StrategySelector strategy={strategy} onChange={onStrategyChange} disabled={busy} />
+
             <h2>Candidate bbox</h2>
             {bbox ? (
                 <dl>
@@ -60,6 +67,10 @@ export function SamplingPanel({
                     <dd>{DENSITY.format(bbox.density_per_km2)} / km²</dd>
                     <dt>vs. densest cell</dt>
                     <dd>{PERCENT.format(bbox.max_density_ratio)}</dd>
+                    <dt>Built volume</dt>
+                    <dd>{INT.format(bbox.built_volume)} m³</dd>
+                    <dt>vs. densest built cell</dt>
+                    <dd>{PERCENT.format(bbox.max_built_volume_ratio)}</dd>
                     <dt>ID</dt>
                     <dd>
                         <code>{bbox.id.slice(0, 8)}</code>

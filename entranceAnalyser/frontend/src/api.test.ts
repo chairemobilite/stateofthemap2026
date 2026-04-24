@@ -17,22 +17,41 @@ function jsonFetch(body: unknown, init: { status?: number; statusText?: string }
 }
 
 describe('api client', () => {
-    it('fetchRandomBbox hits /api/bbox/random and returns the parsed body', async () => {
+    it('fetchRandomBbox defaults to blended α=0.5 and returns the parsed body', async () => {
         const fetchFn = jsonFetch(SAMPLE_BBOX);
-        const bbox = await fetchRandomBbox(fetchFn);
-        expect(fetchFn).toHaveBeenCalledWith('/api/bbox/random');
+        const bbox = await fetchRandomBbox(undefined, fetchFn);
+        expect(fetchFn).toHaveBeenCalledWith('/api/bbox/random?strategy=blended&alpha=0.5');
         expect(bbox).toEqual(SAMPLE_BBOX);
+    });
+
+    it.each([
+        ['uniform', '/api/bbox/random?strategy=uniform'],
+        ['population', '/api/bbox/random?strategy=population'],
+        ['built', '/api/bbox/random?strategy=built'],
+    ] as const)(
+        'fetchRandomBbox omits alpha for %s',
+        async (name, expectedUrl) => {
+            const fetchFn = jsonFetch(SAMPLE_BBOX);
+            await fetchRandomBbox({ name, alpha: 0.5 }, fetchFn);
+            expect(fetchFn).toHaveBeenCalledWith(expectedUrl);
+        },
+    );
+
+    it('fetchRandomBbox forwards a custom blended alpha', async () => {
+        const fetchFn = jsonFetch(SAMPLE_BBOX);
+        await fetchRandomBbox({ name: 'blended', alpha: 0.25 }, fetchFn);
+        expect(fetchFn).toHaveBeenCalledWith('/api/bbox/random?strategy=blended&alpha=0.25');
     });
 
     it.each(['keep', 'reject'] as const)('submitDecision posts %s as JSON and parses the reply', async (decision) => {
         const fetchFn = jsonFetch({ ok: true, total_kept: 7 });
-        const reply = await submitDecision(SAMPLE_BBOX.id, decision, fetchFn);
+        const reply = await submitDecision(SAMPLE_BBOX, decision, fetchFn);
 
         expect(fetchFn).toHaveBeenCalledTimes(1);
         const [url, init] = fetchFn.mock.calls[0];
         expect(url).toBe('/api/bbox/decision');
         expect(init.method).toBe('POST');
-        expect(JSON.parse(init.body)).toEqual({ id: SAMPLE_BBOX.id, decision });
+        expect(JSON.parse(init.body)).toEqual({ bbox: SAMPLE_BBOX, decision });
 
         expect(reply).toEqual({ ok: true, total_kept: 7 });
     });
@@ -45,6 +64,6 @@ describe('api client', () => {
 
     it('throws a descriptive error on non-OK responses', async () => {
         const fetchFn = jsonFetch({ message: 'boom' }, { status: 500, statusText: 'Internal Server Error' });
-        await expect(fetchRandomBbox(fetchFn)).rejects.toThrow(/500 Internal Server Error/);
+        await expect(fetchRandomBbox(undefined, fetchFn)).rejects.toThrow(/500 Internal Server Error/);
     });
 });

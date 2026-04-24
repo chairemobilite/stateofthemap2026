@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 
+import { DEFAULT_STRATEGY, type Strategy } from './api';
 import { useSampling } from './useSampling';
 import { makeBbox } from './test/fixtures';
 
@@ -39,7 +40,7 @@ describe('useSampling', () => {
 
         await act(() => result.current.decide(decision));
 
-        expect(submit).toHaveBeenCalledExactlyOnceWith(first.id, decision);
+        expect(submit).toHaveBeenCalledExactlyOnceWith(first, decision);
         expect(result.current.bbox).toEqual(second);
         expect(result.current.keptCount).toBe(decision === 'keep' ? 1 : 0);
         expect(result.current.status).toBe('idle');
@@ -57,5 +58,40 @@ describe('useSampling', () => {
         await act(() => result.current.skip());
         expect(result.current.bbox).toEqual(second);
         expect(submit).not.toHaveBeenCalled();
+    });
+
+    it('starts with the default strategy and passes it to fetchNext', async () => {
+        const first = fixture('1');
+        const fetchNext = vi.fn().mockResolvedValue(first);
+        const { result } = renderHook(() => useSampling({ fetchNext, submit: vi.fn() }));
+
+        await waitFor(() => expect(result.current.bbox).toEqual(first));
+        expect(result.current.strategy).toEqual(DEFAULT_STRATEGY);
+        expect(fetchNext).toHaveBeenCalledExactlyOnceWith(DEFAULT_STRATEGY);
+    });
+
+    it('setStrategy stores the new strategy and triggers a fresh fetch', async () => {
+        const first = fixture('1');
+        const second = fixture('2');
+        const fetchNext = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+        const { result } = renderHook(() => useSampling({ fetchNext, submit: vi.fn() }));
+        await waitFor(() => expect(result.current.bbox).toEqual(first));
+
+        const uniform: Strategy = { name: 'uniform', alpha: DEFAULT_STRATEGY.alpha };
+        await act(async () => {
+            result.current.setStrategy(uniform);
+        });
+        await waitFor(() => expect(result.current.bbox).toEqual(second));
+        expect(result.current.strategy).toEqual(uniform);
+        expect(fetchNext).toHaveBeenNthCalledWith(2, uniform);
+    });
+
+    it('respects initialStrategy on first load', async () => {
+        const first = fixture('1');
+        const fetchNext = vi.fn().mockResolvedValue(first);
+        const initial: Strategy = { name: 'population', alpha: 0 };
+        renderHook(() => useSampling({ fetchNext, submit: vi.fn(), initialStrategy: initial }));
+        await waitFor(() => expect(fetchNext).toHaveBeenCalled());
+        expect(fetchNext).toHaveBeenCalledWith(initial);
     });
 });
