@@ -84,6 +84,14 @@ impl Aggregator {
             }
         })
     }
+
+    /// Consume the aggregator and return the dense row-major sums array.
+    ///
+    /// Exposed so `build-grid` can merge two aggregations (one per raster)
+    /// index-by-index when the operator provides a built-volume companion.
+    pub fn into_dense(self) -> Vec<f32> {
+        self.sums
+    }
 }
 
 #[cfg(test)]

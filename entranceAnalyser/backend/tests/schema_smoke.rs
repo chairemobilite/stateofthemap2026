@@ -42,6 +42,27 @@ async fn postgis_extension_is_installed() {
     db.cleanup().await.ok();
 }
 
+#[rstest]
+#[case("grid_cells", "built_volume")]
+#[case("grid_meta",  "total_pop")]
+#[case("grid_meta",  "total_built")]
+#[case("grid_meta",  "max_built_volume")]
+#[tokio::test]
+async fn migration_0002_adds_columns(#[case] table: &str, #[case] column: &str) {
+    let Some(db) = common::pg_or_skip().await else { return };
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)",
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(&db.pool)
+    .await
+    .expect("query succeeds");
+    assert!(exists, "column {table}.{column} should exist after migrations");
+    db.cleanup().await.ok();
+}
+
 #[tokio::test]
 async fn grid_cells_geom_column_is_srid_4326_point() {
     let Some(db) = common::pg_or_skip().await else { return };
