@@ -1,25 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 
-import type { Bbox } from './api';
 import { useSampling } from './useSampling';
+import { makeBbox } from './test/fixtures';
 
-function makeBbox(suffix: string): Bbox {
-    return {
-        id: `00000000-0000-0000-0000-00000000000${suffix}`,
-        west: 0,
-        south: 0,
-        east: 0.1,
-        north: 0.1,
-        center: [0.05, 0.05],
-        population: null,
-        filtered: false,
-    };
-}
+const fixture = (suffix: string) =>
+    makeBbox({ id: `00000000-0000-0000-0000-00000000000${suffix}` });
 
 describe('useSampling', () => {
     it('auto-loads a first candidate on mount', async () => {
-        const first = makeBbox('1');
+        const first = fixture('1');
         const fetchNext = vi.fn().mockResolvedValue(first);
 
         const { result } = renderHook(() => useSampling({ fetchNext, submit: vi.fn() }));
@@ -39,8 +29,8 @@ describe('useSampling', () => {
     });
 
     it.each(['keep', 'reject'] as const)('decide(%s) submits, updates kept count, and fetches the next bbox', async (decision) => {
-        const first = makeBbox('1');
-        const second = makeBbox('2');
+        const first = fixture("1");
+        const second = fixture("2");
         const fetchNext = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
         const submit = vi.fn().mockResolvedValue({ total_kept: decision === 'keep' ? 1 : 0 });
 
@@ -56,8 +46,8 @@ describe('useSampling', () => {
     });
 
     it('skip() fetches the next bbox without calling submit', async () => {
-        const first = makeBbox('1');
-        const second = makeBbox('2');
+        const first = fixture("1");
+        const second = fixture("2");
         const fetchNext = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
         const submit = vi.fn();
 
