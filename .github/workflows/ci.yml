@@ -13,6 +13,24 @@ jobs:
     defaults:
       run:
         working-directory: entranceAnalyser
+    services:
+      postgres:
+        # PostGIS-enabled Postgres so ST_* functions work out of the box.
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      PG_CONNECTION_STRING_PREFIX: postgres://postgres@localhost:5432/
+      PG_DATABASE: entrance_analyser
+      PG_DATABASE_TEST: entrance_analyser_test
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +47,17 @@ jobs:
             ~/.cargo/git
             entranceAnalyser/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('entranceAnalyser/**/Cargo.toml') }}
+
+      - name: Provision application and test databases
+        run: |
+          # The integration-test harness carves a fresh, uniquely-named
+          # database out of $PG_DATABASE_TEST on every run, but it
+          # connects through the server's built-in `postgres` database,
+          # which the service container already provides. We create
+          # $PG_DATABASE here so the server binary (and anyone running
+          # the build-grid binary) can point at it without extra setup.
+          psql "postgres://postgres@localhost:5432/postgres" \
+            -c "CREATE DATABASE ${PG_DATABASE};"
 
       - name: cargo check
         run: cargo check --all-targets
