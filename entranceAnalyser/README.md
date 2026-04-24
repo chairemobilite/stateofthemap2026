@@ -24,7 +24,7 @@ config/    Runtime config consumed by the analysis pipeline
            poi_tags.yml                            POI tag groups (forthcoming runner)
 frontend/  React + Vite + MapLibre GL — two screens:
            src/                                    Sampling screen (keep/reject + strategy)
-           src/keptBboxes/                         Kept-bboxes screen (list + progress pills)
+           src/keptBboxes/                         Kept-bboxes overview map + popup row
 ```
 
 The HTTP backend serves three endpoints:
@@ -199,15 +199,18 @@ from the matching `grid_cells` on every `/api/bbox/random` call.
 The UI has two screens, switched via the tab pair floating at the top
 of the viewport:
 
-| Screen         | What it does                                                                    |
-|----------------|---------------------------------------------------------------------------------|
-| `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map. |
-| `Kept bboxes`  | List every row currently in `kept_bboxes` with a per-row analysis-progress pill. |
+| Screen         | What it does                                                                                                        |
+|----------------|---------------------------------------------------------------------------------------------------------------------|
+| `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
+| `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. |
 
-Every row on the `Kept bboxes` screen currently shows `Not started`
-— the frontend defines the full `ProgressStatus` union
-(`not_started` / `queued` / `running` / `done` / `failed`) and
-matching pill styles up front in
+The `Kept bboxes` map uses a single GeoJSON source per geometry type
+(polygons for the rectangles, points for the low-zoom markers) so the
+visible layer swaps without reloading data. Clicking any feature opens
+a MapLibre popup whose body is a React-rendered `KeptBboxRow`
+(headline info + `Not started` progress pill). The full
+`ProgressStatus` union (`not_started` / `queued` / `running` / `done`
+/ `failed`) and its pill styles are defined up front in
 [`frontend/src/keptBboxes/progress.ts`](frontend/src/keptBboxes/progress.ts),
 so the forthcoming analysis runner can flip pills without touching
 any component that displays them.
