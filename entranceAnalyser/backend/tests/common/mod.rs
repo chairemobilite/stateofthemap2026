@@ -23,6 +23,7 @@ use uuid::Uuid;
 pub struct TestDb {
     pub pool: PgPool,
     pub name: String,
+    pub url: String,
     pub admin_url: String,
 }
 
@@ -87,15 +88,15 @@ pub async fn try_fresh_db() -> Result<TestDb, String> {
         .await
         .map_err(|e| format!("CREATE DATABASE {name} failed: {e}"))?;
 
-    let pool_url = config::database_url_for(&prefix, &name);
-    let pool = db::connect(&pool_url)
+    let url = config::database_url_for(&prefix, &name);
+    let pool = db::connect(&url)
         .await
-        .map_err(|e| format!("cannot open pool on {pool_url}: {e}"))?;
+        .map_err(|e| format!("cannot open pool on {url}: {e}"))?;
     db::run_migrations(&pool)
         .await
         .map_err(|e| format!("migrations failed: {e}"))?;
 
-    Ok(TestDb { pool, name, admin_url })
+    Ok(TestDb { pool, name, url, admin_url })
 }
 
 /// Skip the test body with an `eprintln!` when Postgres is unavailable.

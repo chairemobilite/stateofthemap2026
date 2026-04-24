@@ -1,14 +1,17 @@
 //! End-to-end smoke test for the `entrance-analyser-build-grid` binary.
 //!
 //! Synthesises a tiny 4 × 4 px Float32 GeoTIFF in a temp dir with
-//! Mollweide-style geo tags, invokes the released binary against it,
-//! and reads the resulting grid file back to verify the pipeline.
+//! Mollweide-style geo tags, invokes the released binary against an
+//! ephemeral Postgres database, and checks that the expected rows land
+//! in `grid_meta` / `grid_cells` with a valid PostGIS geometry.
+
+mod common;
 
 use std::fs::File;
 use std::io::BufWriter;
 use std::process::Command;
 
-use entrance_analyser_backend::grid::GridFile;
+use sqlx::Row;
 use tempfile::TempDir;
 use tiff::encoder::{colortype::Gray32Float, TiffEncoder};
 use tiff::tags::Tag;
@@ -33,11 +36,12 @@ fn write_synthetic_geotiff(path: &std::path::Path, pixels: &[f32]) {
     img.write_data(pixels).unwrap();
 }
 
-#[test]
-fn build_grid_aggregates_synthetic_tiff() {
+#[tokio::test]
+async fn build_grid_aggregates_synthetic_tiff() {
+    let Some(db) = common::pg_or_skip().await else { return };
+
     let dir = TempDir::new().unwrap();
     let tif = dir.path().join("synth.tif");
-    let bin = dir.path().join("out.bin");
 
     let pixels: Vec<f32> = vec![
         // upper-left super-cell sums to 4, upper-right to 8,
@@ -53,7 +57,7 @@ fn build_grid_aggregates_synthetic_tiff() {
     let status = Command::new(exe)
         .args([
             "--input", tif.to_str().unwrap(),
-            "--output", bin.to_str().unwrap(),
+            "--database-url", &db.url,
             "--cell-size-km", "2",
             "--epoch", "2020",
             "--min-population", "0.5",
@@ -62,21 +66,83 @@ fn build_grid_aggregates_synthetic_tiff() {
         .expect("binary runs");
     assert!(status.success(), "build-grid exited with {status}");
 
-    let grid = GridFile::read_from(File::open(&bin).unwrap()).unwrap();
-    assert_eq!(grid.cell_size_km, 2);
-    assert_eq!(grid.epoch, 2020);
-    assert_eq!(grid.cells.len(), 3, "lower-left empty cell should be dropped");
-    assert_eq!(grid.max_pop, 16.0);
+    // grid_meta carries exactly one row for our (cell_size_km, epoch) pair.
+    let (cell_size, epoch, max_pop): (i32, i16, f32) = sqlx::query_as(
+        "SELECT cell_size_km, epoch, max_pop FROM grid_meta",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(cell_size, 2);
+    assert_eq!(epoch, 2020);
+    assert_eq!(max_pop, 16.0);
 
-    let mut by_pop: Vec<f32> = grid.cells.iter().map(|c| c.pop).collect();
-    by_pop.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    assert_eq!(by_pop, vec![4.0, 8.0, 16.0]);
+    // Three inhabited super-cells, sorted by population.
+    let rows = sqlx::query(
+        "SELECT lat, lon, pop, ST_SRID(geom) AS srid, GeometryType(geom) AS gtype \
+         FROM grid_cells ORDER BY pop",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 3, "lower-left empty cell should be dropped");
 
-    // All cells sit very close to (0°, 0°) — the synthetic raster is a
-    // 4 km square centred on the Mollweide origin, so every cell centre
-    // is within ~0.02° of the equator/prime meridian.
-    for c in &grid.cells {
-        assert!(c.lat.abs() < 0.02, "lat = {}", c.lat);
-        assert!(c.lon.abs() < 0.02, "lon = {}", c.lon);
+    let pops: Vec<f32> = rows.iter().map(|r| r.get::<f32, _>("pop")).collect();
+    assert_eq!(pops, vec![4.0, 8.0, 16.0]);
+
+    // All cells sit very close to (0°, 0°) with a valid PostGIS Point
+    // in EPSG:4326.
+    for r in &rows {
+        let lat: f32 = r.get("lat");
+        let lon: f32 = r.get("lon");
+        let srid: i32 = r.get("srid");
+        let gtype: String = r.get("gtype");
+        assert!(lat.abs() < 0.02, "lat = {lat}");
+        assert!(lon.abs() < 0.02, "lon = {lon}");
+        assert_eq!(srid, 4326);
+        assert_eq!(gtype, "POINT");
     }
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn build_grid_is_idempotent() {
+    let Some(db) = common::pg_or_skip().await else { return };
+
+    let dir = TempDir::new().unwrap();
+    let tif = dir.path().join("synth.tif");
+    let pixels: Vec<f32> = vec![
+        1.0, 1.0, 2.0, 2.0,
+        1.0, 1.0, 2.0, 2.0,
+        0.0, 0.0, 4.0, 4.0,
+        0.0, 0.0, 4.0, 4.0,
+    ];
+    write_synthetic_geotiff(&tif, &pixels);
+
+    let exe = env!("CARGO_BIN_EXE_entrance-analyser-build-grid");
+    for _ in 0..2 {
+        let status = Command::new(exe)
+            .args([
+                "--input", tif.to_str().unwrap(),
+                "--database-url", &db.url,
+                "--cell-size-km", "2",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    let meta_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_meta")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let cells_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_cells")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(meta_count, 1, "re-running must not duplicate grid_meta rows");
+    assert_eq!(cells_count, 3, "re-running must replace grid_cells, not append");
+
+    db.cleanup().await.ok();
 }
