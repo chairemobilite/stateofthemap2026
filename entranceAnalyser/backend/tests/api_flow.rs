@@ -15,6 +15,8 @@ use axum::http::{Method, Request, StatusCode};
 use entrance_analyser_backend::{
     api::{self, AppState},
     bbox::{Bbox, KeptBbox},
+    overpass::OverpassClient,
+    poi_config::PoiTagConfig,
     sampler::Sampler,
     storage::PgStore,
 };
@@ -22,6 +24,16 @@ use http_body_util::BodyExt;
 use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
+
+/// Stub config + Overpass client for tests that don't exercise the
+/// POI-pick flow. `UNREACHABLE_OVERPASS_URL` deliberately points at a
+/// closed port so any accidental call surfaces immediately rather than
+/// hitting the public Overpass instance.
+const UNREACHABLE_OVERPASS_URL: &str = "http://127.0.0.1:1/api/interpreter";
+
+fn stub_poi_config() -> PoiTagConfig {
+    PoiTagConfig::from_yaml_str("groups:\n    shops:\n        - shop=*\n").unwrap()
+}
 
 /// Seed one cell with both pop and built-volume signals so the default
 /// `blended` strategy can draw from a non-empty grid. `with_built`
@@ -58,7 +70,12 @@ async fn seed_single_cell(pool: &sqlx::PgPool, with_built: bool) {
 async fn build_router(pool: sqlx::PgPool) -> axum::Router {
     let sampler = Sampler::from_latest(pool.clone()).await.unwrap();
     assert!(sampler.is_some(), "seed must populate grid_meta");
-    let state = AppState::new(PgStore::new(pool), sampler);
+    let state = AppState::new(
+        PgStore::new(pool),
+        sampler,
+        stub_poi_config(),
+        OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+    );
     api::router(state)
 }
 
@@ -291,7 +308,12 @@ async fn random_without_grid_returns_503() {
     // No seed: grid_meta is empty.
     let sampler = Sampler::from_latest(db.pool.clone()).await.unwrap();
     assert!(sampler.is_none());
-    let state = AppState::new(PgStore::new(db.pool.clone()), sampler);
+    let state = AppState::new(
+        PgStore::new(db.pool.clone()),
+        sampler,
+        stub_poi_config(),
+        OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+    );
     let app = api::router(state);
 
     let resp = app
