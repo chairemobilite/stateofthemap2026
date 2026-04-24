@@ -2,31 +2,54 @@
 
 Sampling tool used to gather candidate sites for the OSM Science 2026
 analysis of building-entrance mapping. Pulls inhabited areas from a
-pre-computed GHS-POP grid stored in PostgreSQL, draws them on a
-MapLibre map with togglable basemaps, and persists the operator's keep
-/ reject decisions — along with downstream per-bbox analyses — in the
-same database.
+pre-computed GHS-POP grid (optionally enriched with GHS-BUILT-V built
+volume) stored in PostgreSQL, draws them on a MapLibre map with
+togglable basemaps, and persists the operator's keep / reject
+decisions — along with downstream per-bbox analyses — in the same
+database.
 
 ## Architecture
 
 ```
 backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
-           migrations/0001_init.sql  schema (grid + kept_bboxes + analyses)
-           src/config.rs             PG_* env → database URL
-           src/db.rs                 pool factory + embedded migrator
-           src/sampler.rs            random draw from grid_cells
-           src/storage.rs            PgStore: kept_bboxes + analyses
-           src/bin/build_grid.rs     offline aggregation tool
-frontend/  React + Vite + MapLibre GL — keep/reject UI
+           migrations/0001_init.sql                schema (grid + kept_bboxes + analyses)
+           migrations/0002_grid_built_volume.sql   built_volume + grid_meta totals
+           migrations/0003_kept_bboxes_built_volume.sql   built context on kept rows
+           src/config.rs                           PG_* env → database URL
+           src/db.rs                               pool factory + embedded migrator
+           src/sampler.rs                          uniform/population/built/blended draws
+           src/storage.rs                          PgStore: kept_bboxes + analyses
+           src/bin/build_grid.rs                   offline aggregation tool
+frontend/  React + Vite + MapLibre GL — keep/reject UI + strategy selector
 ```
 
 The HTTP backend serves three endpoints:
 
-| Method | Path                  | Purpose                                                         |
-|--------|-----------------------|-----------------------------------------------------------------|
-| GET    | `/api/bbox/random`    | draw a candidate (503 if `grid_meta` is empty)                  |
-| POST   | `/api/bbox/decision`  | keep or reject a previously drawn bbox (client echoes it back)  |
-| GET    | `/api/bbox/kept`      | list every persisted kept bbox                                  |
+| Method | Path                                        | Purpose                                                          |
+|--------|---------------------------------------------|------------------------------------------------------------------|
+| GET    | `/api/bbox/random?strategy=…&alpha=…`       | draw a candidate under the given strategy (see below)            |
+| POST   | `/api/bbox/decision`                        | keep or reject a previously drawn bbox (client echoes it back)   |
+| GET    | `/api/bbox/kept`                            | list every persisted kept bbox                                   |
+
+### Sampling strategies
+
+`?strategy=` controls how `/api/bbox/random` weights the draw. Default
+is `blended` with `α=0.5`.
+
+| Strategy     | Weight per cell                                          | When to use                                                |
+|--------------|----------------------------------------------------------|------------------------------------------------------------|
+| `uniform`    | 1                                                        | diagnostic baseline — every inhabited cell equally likely  |
+| `population` | `pop_i`                                                  | hit where people live (standard OD / accessibility view)   |
+| `built`      | `built_i`                                                | rescue industrial / port / campus blocks with few residents |
+| `blended`    | `α · built_i / Σ built + (1-α) · pop_i / Σ pop`          | recommended: both signals, per-draw 50/50 at α=0.5         |
+
+Under the hood each non-uniform strategy runs
+**Efraimidis–Spirakis weighted reservoir sampling**
+(`ORDER BY random() ^ (1 / weight) DESC LIMIT 1`), giving an exact
+probability-proportional-to-size draw in one query. `built` and
+`blended` need a grid built with `--built-volume`; if the column is
+all-zero the backend returns 503 with a rebuild hint instead of
+silently returning uniform draws.
 
 ## Bootstrapping
 
@@ -60,31 +83,50 @@ Either way, the backend enables the PostGIS extension automatically on
 startup via the embedded `0001_init.sql` migration — you do **not**
 need to run `sqlx migrate run` by hand.
 
-### 2. Download the source raster
+### 2. Download the source rasters
 
 [GHS-POP R2023A][ghs] — 2020 epoch, 1 km Mollweide (EPSG:54009),
-~322 MB zipped:
+~322 MB zipped. The companion [GHS-BUILT-V R2023A][ghs-built] uses the
+exact same grid and adds per-cell built volume (m³) so the sampler can
+find industrial / port / campus blocks that host few residents:
 
 ```bash
 curl -O 'https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E2020_GLOBE_R2023A_54009_1000/V1-0/GHS_POP_E2020_GLOBE_R2023A_54009_1000_V1_0.zip'
 unzip GHS_POP_E2020_GLOBE_R2023A_54009_1000_V1_0.zip
+
+curl -O 'https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_V_GLOBE_R2023A/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_1000/V1-0/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_1000_V1_0.zip'
+unzip GHS_BUILT_V_E2020_GLOBE_R2023A_54009_1000_V1_0.zip
 ```
 
-You only need the `.tif`; the rest of the archive is metadata.
+You only need the `.tif`s; the rest of each archive is metadata. The
+built-volume file is optional: build-grid works with just GHS-POP, but
+then the `built` and `blended` sampling strategies return 503 until
+you rebuild with both.
 
-> **Citation** (CC BY 4.0):
+> **Citations** (both CC BY 4.0):
 > Schiavina, M., Freire, S., MacManus, K. (2023): GHS-POP R2023A — GHS
 > population grid multitemporal (1975–2030). European Commission, Joint
 > Research Centre (JRC). DOI: [10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE](https://doi.org/10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE)
+>
+> Pesaresi, M., Politis, P. (2023): GHS-BUILT-V R2023A — GHS built-up
+> volume grid multitemporal (1975–2030). European Commission, Joint
+> Research Centre (JRC). DOI: [10.2905/AB2F107A-03CD-47A3-85E5-139D8EC63283](https://doi.org/10.2905/AB2F107A-03CD-47A3-85E5-139D8EC63283)
 
 ### 3. Aggregate into the grid tables
 
 ```bash
 cd entranceAnalyser
 cargo run --release --bin entrance-analyser-build-grid -- \
-    --input /path/to/GHS_POP_E2020_GLOBE_R2023A_54009_1000_V1_0.tif \
+    --input        /path/to/GHS_POP_E2020_GLOBE_R2023A_54009_1000_V1_0.tif \
+    --built-volume /path/to/GHS_BUILT_V_E2020_GLOBE_R2023A_54009_1000_V1_0.tif \
     --cell-size-km 10
 ```
+
+`--built-volume` is optional; omit it for a pop-only grid. Both
+rasters are read in lock-step and a super-cell survives if either
+signal crosses its `--min-population` / `--min-built-volume`
+threshold (defaults `0.5` / `0.5`) — so purely-industrial cells land
+in the grid even with zero residents.
 
 The binary reads `PG_CONNECTION_STRING_PREFIX + PG_DATABASE` from `.env`
 by default; pass `--database-url` to override. Writes are idempotent
@@ -143,10 +185,14 @@ on machines without a live database.
 
 ## Sampling performance note
 
-`sample()` uses `ORDER BY random() LIMIT 1`, which is acceptable at our
-scale (single-operator dev tool, ~800 k rows at 10 km). If the grid
-ever grows or the workload becomes concurrent, swap in the
-`tsm_system_rows` extension and `TABLESAMPLE SYSTEM_ROWS(1)` — that's
-a one-query change in [`src/sampler.rs`](backend/src/sampler.rs).
+Uniform draws use `ORDER BY random() LIMIT 1`; the weighted strategies
+use `ORDER BY random() ^ (1 / weight) DESC LIMIT 1`
+(Efraimidis–Spirakis). Both are full seq-scans of `grid_cells` — at
+our scale (single-operator dev tool, ~800k rows at 10 km) that lands
+around 100–200 ms per draw, comfortably under the human click loop.
+If the workload ever becomes concurrent, cache a cumulative-sum column
++ index and binary-search against `random() · Σ weight` — that's a
+one-query change in [`src/sampler.rs`](backend/src/sampler.rs).
 
 [ghs]: https://human-settlement.emergency.copernicus.eu/ghs_pop2023.php
+[ghs-built]: https://human-settlement.emergency.copernicus.eu/ghs_buV2023.php
