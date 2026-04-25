@@ -28,7 +28,9 @@ fn sample_bbox(center: [f64; 2]) -> Bbox {
 
 #[tokio::test]
 async fn append_then_load_roundtrip() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     let store = PgStore::new(db.pool.clone());
 
     let a = sample_bbox([-73.55, 45.55]);
@@ -46,7 +48,9 @@ async fn append_then_load_roundtrip() {
 
 #[tokio::test]
 async fn count_reflects_rejects_as_noop() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     let store = PgStore::new(db.pool.clone());
     assert_eq!(store.count().await.unwrap(), 0);
     store.append(sample_bbox([0.0, 0.0])).await.unwrap();
@@ -56,14 +60,21 @@ async fn count_reflects_rejects_as_noop() {
 
 #[tokio::test]
 async fn record_analysis_upserts_by_bbox_and_kind() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     let store = PgStore::new(db.pool.clone());
     let bbox = sample_bbox([0.0, 0.0]);
     let id = bbox.id;
     store.append(bbox).await.unwrap();
 
     store
-        .record_analysis(id, "entrance_count", Some(42.0), Some(json!({"confidence": 0.8})))
+        .record_analysis(
+            id,
+            "entrance_count",
+            Some(42.0),
+            Some(json!({"confidence": 0.8})),
+        )
         .await
         .unwrap();
     // Same (bbox_id, kind) upserts in place.
@@ -82,7 +93,10 @@ async fn record_analysis_upserts_by_bbox_and_kind() {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-    assert_eq!(n, 2, "upsert must not duplicate rows on the same (bbox_id, kind)");
+    assert_eq!(
+        n, 2,
+        "upsert must not duplicate rows on the same (bbox_id, kind)"
+    );
 
     let v: Option<f64> = sqlx::query_scalar(
         "SELECT value FROM analyses WHERE bbox_id = $1 AND kind = 'entrance_count'",
@@ -98,7 +112,9 @@ async fn record_analysis_upserts_by_bbox_and_kind() {
 
 #[tokio::test]
 async fn append_writes_a_valid_postgis_polygon() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     let store = PgStore::new(db.pool.clone());
     let bbox = sample_bbox([10.0, 20.0]);
     let id = bbox.id;

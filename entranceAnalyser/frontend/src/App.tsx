@@ -4,6 +4,7 @@ import { BasemapToggle } from './BasemapToggle';
 import { BASEMAPS, DEFAULT_BASEMAP_ID, type BasemapId } from './basemaps';
 import { KeptBboxesMap } from './keptBboxes/KeptBboxesMap';
 import { useKeptBboxes } from './keptBboxes/useKeptBboxes';
+import { usePoiPicks } from './keptBboxes/usePoiPicks';
 import { MapView } from './MapView';
 import { SamplingPanel } from './SamplingPanel';
 import { useSampling } from './useSampling';
@@ -15,6 +16,7 @@ function App() {
     const [basemapId, setBasemapId] = useState<BasemapId>(DEFAULT_BASEMAP_ID);
     const { bbox, keptCount, status, error, strategy, setStrategy, decide, skip } = useSampling();
     const kept = useKeptBboxes();
+    const poiPicks = usePoiPicks();
 
     return (
         <div className="app">
@@ -61,6 +63,9 @@ function App() {
                         basemapId={basemapId}
                         status={kept.status}
                         error={kept.error}
+                        picks={poiPicks.picks}
+                        picking={poiPicks.picking}
+                        onPickPoi={poiPicks.pick}
                     />
                     <BasemapToggle
                         basemaps={BASEMAPS}

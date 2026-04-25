@@ -7,9 +7,15 @@
 //!  - `fill` + `line` for rectangles at `zoom >= RECT_MIN_ZOOM`
 //!  - `circle` markers at the cell centers at `zoom < RECT_MIN_ZOOM`
 //!
-//! Clicking either opens a MapLibre popup hosting a React root that
-//! renders `<KeptBboxRow />`, so the popup body stays in sync with the
-//! list-row shape without duplicating markup.
+//! On top of those, a separate `poi-markers` layer paints picked POIs
+//! (orange dots) at every zoom, so the user can spot which kept cells
+//! already have an analysis cached.
+//!
+//! Clicking a bbox layer opens a MapLibre popup hosting a React root
+//! that renders `<KeptBboxPopup />` — the bbox row plus the
+//! Pick POI control. The popup re-renders in place when picks/picking
+//! change for the open bbox, so the button can flip to "Picking…" and
+//! then to the picked POI without closing the popup.
 
 import { useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -21,12 +27,13 @@ import maplibregl, {
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import type { KeptBbox } from '../api';
+import type { KeptBbox, Poi } from '../api';
 import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
-import { KeptBboxRow } from './KeptBboxRow';
+import { KeptBboxPopup } from './KeptBboxPopup';
 import {
     toCenterCollection,
     toCollectiveBounds,
+    toPoiCollection,
     toPolygonCollection,
 } from './keptBboxesGeoJson';
 import type { KeptBboxesStatus } from './useKeptBboxes';
@@ -36,13 +43,23 @@ export interface KeptBboxesMapProps {
     basemapId: BasemapId;
     status: KeptBboxesStatus;
     error: string | null;
+    /** Per-bbox picked POI map, keyed by bbox id. `undefined` means
+     *  no pick yet, `null` means Overpass matched nothing. */
+    picks: Record<string, Poi | null>;
+    /** Bbox ids currently fetching a pick, so the popup can disable
+     *  the button without blocking other rows. */
+    picking: Set<string>;
+    /** Triggered by the "Pick POI" button inside the popup. */
+    onPickPoi: (bboxId: string) => void;
 }
 
 const POLY_SOURCE = 'kept-polygons';
 const POINT_SOURCE = 'kept-points';
+const POI_SOURCE = 'poi-picks';
 const FILL_LAYER = 'kept-fill';
 const LINE_LAYER = 'kept-outline';
 const CIRCLE_LAYER = 'kept-circle';
+const POI_LAYER = 'poi-markers';
 
 /**
  * Zoom threshold above which polygon rectangles replace circle markers.
@@ -61,17 +78,23 @@ type MapLibreClickEvent = MapMouseEvent & { features?: MapGeoJSONFeature[] };
  *
  * @param map - Active MapLibre map.
  * @param keptBboxes - Current list of kept bboxes to render.
+ * @param picks - Per-bbox picked POI map for the marker layer.
  */
-function installKeptLayers(map: MapLibreMap, keptBboxes: KeptBbox[]) {
-    for (const layer of [FILL_LAYER, LINE_LAYER, CIRCLE_LAYER]) {
+function installKeptLayers(
+    map: MapLibreMap,
+    keptBboxes: KeptBbox[],
+    picks: Record<string, Poi | null>,
+) {
+    for (const layer of [FILL_LAYER, LINE_LAYER, CIRCLE_LAYER, POI_LAYER]) {
         if (map.getLayer(layer)) map.removeLayer(layer);
     }
-    for (const source of [POLY_SOURCE, POINT_SOURCE]) {
+    for (const source of [POLY_SOURCE, POINT_SOURCE, POI_SOURCE]) {
         if (map.getSource(source)) map.removeSource(source);
     }
 
     map.addSource(POLY_SOURCE, { type: 'geojson', data: toPolygonCollection(keptBboxes) });
     map.addSource(POINT_SOURCE, { type: 'geojson', data: toCenterCollection(keptBboxes) });
+    map.addSource(POI_SOURCE, { type: 'geojson', data: toPoiCollection(picks) });
 
     map.addLayer({
         id: FILL_LAYER,
@@ -100,17 +123,56 @@ function installKeptLayers(map: MapLibreMap, keptBboxes: KeptBbox[]) {
             'circle-stroke-width': 1.5,
         },
     });
+    map.addLayer({
+        id: POI_LAYER,
+        type: 'circle',
+        source: POI_SOURCE,
+        paint: {
+            'circle-radius': 4,
+            'circle-color': '#f97316',
+            'circle-opacity': 0.95,
+            'circle-stroke-color': '#fff',
+            'circle-stroke-width': 1.25,
+        },
+    });
 }
 
-export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBboxesMapProps) {
+/** Refresh just the POI marker source without touching the bbox
+ *  layers, for the cheap path when only `picks` changed. */
+function updatePoiSource(map: MapLibreMap, picks: Record<string, Poi | null>) {
+    const source = map.getSource(POI_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (source) source.setData(toPoiCollection(picks));
+}
+
+export function KeptBboxesMap({
+    keptBboxes,
+    basemapId,
+    status,
+    error,
+    picks,
+    picking,
+    onPickPoi,
+}: KeptBboxesMapProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
 
-    // Keep the latest bboxes reachable from async MapLibre callbacks
-    // that fire outside React's update cycle (style.load, click).
+    // Keep the latest collections reachable from async MapLibre callbacks
+    // (style.load, click) that fire outside React's update cycle.
     const keptRef = useRef(keptBboxes);
+    const picksRef = useRef(picks);
+    const pickingRef = useRef(picking);
+    const onPickPoiRef = useRef(onPickPoi);
     useEffect(() => {
         keptRef.current = keptBboxes;
+    });
+    useEffect(() => {
+        picksRef.current = picks;
+    });
+    useEffect(() => {
+        pickingRef.current = picking;
+    });
+    useEffect(() => {
+        onPickPoiRef.current = onPickPoi;
     });
 
     // Track whether fit-bounds has already run, so reloads via the
@@ -118,14 +180,32 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
     const hasFitRef = useRef(false);
 
     // Exactly one popup at a time, with its React root in parallel.
+    // `popupBboxRef` holds the id of the bbox the open popup shows so
+    // the picks/picking effects can re-render its body in place.
     const popupRef = useRef<Popup | null>(null);
     const popupRootRef = useRef<Root | null>(null);
+    const popupBboxRef = useRef<string | null>(null);
+
+    /**
+     * Render the popup body for `bbox` into `root`, reading the latest
+     * pick state from refs so callers don't have to thread props in.
+     */
+    const renderPopupBody = (root: Root, bbox: KeptBbox) => {
+        root.render(
+            <KeptBboxPopup
+                bbox={bbox}
+                pickedPoi={picksRef.current[bbox.id]}
+                isPicking={pickingRef.current.has(bbox.id)}
+                onPick={(id) => onPickPoiRef.current(id)}
+            />,
+        );
+    };
 
     /**
      * Tear down any prior popup/root, then mount a fresh one at the
-     * bbox's center hosting a `<KeptBboxRow />`. MapLibre's `close`
-     * event unmounts the root we created here, guarded so a popup
-     * already replaced by a newer one does not double-unmount.
+     * bbox's center. MapLibre's `close` event unmounts the root we
+     * created here, guarded so a popup already replaced by a newer
+     * one does not double-unmount.
      */
     const openPopup = (map: MapLibreMap, bbox: KeptBbox) => {
         popupRootRef.current?.unmount();
@@ -133,7 +213,7 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
 
         const node = document.createElement('div');
         const root = createRoot(node);
-        root.render(<KeptBboxRow bbox={bbox} status="not_started" />);
+        renderPopupBody(root, bbox);
 
         const popup = new maplibregl.Popup({ closeButton: true, maxWidth: '320px' })
             .setLngLat(bbox.center)
@@ -144,10 +224,12 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
                 root.unmount();
                 popupRef.current = null;
                 popupRootRef.current = null;
+                popupBboxRef.current = null;
             }
         });
         popupRef.current = popup;
         popupRootRef.current = root;
+        popupBboxRef.current = bbox.id;
     };
 
     // Create the map once. Registers click handlers for both feature
@@ -166,7 +248,7 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
         mapRef.current = map;
 
         map.on('style.load', () => {
-            installKeptLayers(map, keptRef.current);
+            installKeptLayers(map, keptRef.current, picksRef.current);
         });
         map.on('error', (e) => console.error('[MapLibre]', e.error ?? e));
 
@@ -187,7 +269,7 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
         const leave = () => {
             map.getCanvas().style.cursor = '';
         };
-        for (const layer of [FILL_LAYER, CIRCLE_LAYER]) {
+        for (const layer of [FILL_LAYER, CIRCLE_LAYER, POI_LAYER]) {
             map.on('mouseenter', layer, enter);
             map.on('mouseleave', layer, leave);
         }
@@ -197,6 +279,7 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
             popupRootRef.current?.unmount();
             popupRef.current = null;
             popupRootRef.current = null;
+            popupBboxRef.current = null;
             map.remove();
             mapRef.current = null;
         };
@@ -221,7 +304,7 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
         const map = mapRef.current;
         if (!map) return;
         const apply = () => {
-            installKeptLayers(map, keptBboxes);
+            installKeptLayers(map, keptBboxes, picksRef.current);
             if (hasFitRef.current) return;
             const bounds = toCollectiveBounds(keptBboxes);
             if (bounds) {
@@ -238,6 +321,20 @@ export function KeptBboxesMap({ keptBboxes, basemapId, status, error }: KeptBbox
             map.off('idle', apply);
         };
     }, [keptBboxes]);
+
+    // Refresh the POI marker layer + open popup whenever picks or
+    // picking changes. Cheap path: just `setData` on the existing
+    // source rather than re-installing every layer.
+    useEffect(() => {
+        const map = mapRef.current;
+        if (map && map.isStyleLoaded()) updatePoiSource(map, picks);
+
+        const root = popupRootRef.current;
+        const openId = popupBboxRef.current;
+        if (!root || !openId) return;
+        const bbox = keptBboxes.find((b) => b.id === openId);
+        if (bbox) renderPopupBody(root, bbox);
+    }, [picks, picking, keptBboxes]);
 
     return (
         <div className="kept-bboxes-map">

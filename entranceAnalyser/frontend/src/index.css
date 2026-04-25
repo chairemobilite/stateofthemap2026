@@ -344,3 +344,61 @@ body {
     background: transparent;
     min-width: 18rem;
 }
+
+.kept-bbox-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    min-width: 18rem;
+}
+
+.poi-pick-panel {
+    border-top: 1px solid #e4e4e7;
+    padding-top: 0.55rem;
+}
+
+.poi-pick-panel__button {
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid #1d4ed8;
+    border-radius: 6px;
+    background: #1d4ed8;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.poi-pick-panel__button:disabled {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+.poi-pick-panel__empty {
+    margin: 0;
+    color: #555;
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+.poi-pick-panel__details {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.2rem 0.75rem;
+    margin: 0;
+    font-size: 0.85rem;
+}
+
+.poi-pick-panel__details dt {
+    color: #555;
+    font-size: 0.78rem;
+}
+
+.poi-pick-panel__details dd {
+    margin: 0;
+}
+
+.poi-pick-panel__details code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+}

@@ -15,6 +15,8 @@ use axum::http::{Method, Request, StatusCode};
 use entrance_analyser_backend::{
     api::{self, AppState},
     bbox::{Bbox, KeptBbox},
+    overpass::OverpassClient,
+    poi_config::PoiTagConfig,
     sampler::Sampler,
     storage::PgStore,
 };
@@ -22,6 +24,16 @@ use http_body_util::BodyExt;
 use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
+
+/// Stub config + Overpass client for tests that don't exercise the
+/// POI-pick flow. `UNREACHABLE_OVERPASS_URL` deliberately points at a
+/// closed port so any accidental call surfaces immediately rather than
+/// hitting the public Overpass instance.
+const UNREACHABLE_OVERPASS_URL: &str = "http://127.0.0.1:1/api/interpreter";
+
+fn stub_poi_config() -> PoiTagConfig {
+    PoiTagConfig::from_yaml_str("groups:\n    shops:\n        - shop=*\n").unwrap()
+}
 
 /// Seed one cell with both pop and built-volume signals so the default
 /// `blended` strategy can draw from a non-empty grid. `with_built`
@@ -58,25 +70,41 @@ async fn seed_single_cell(pool: &sqlx::PgPool, with_built: bool) {
 async fn build_router(pool: sqlx::PgPool) -> axum::Router {
     let sampler = Sampler::from_latest(pool.clone()).await.unwrap();
     assert!(sampler.is_some(), "seed must populate grid_meta");
-    let state = AppState::new(PgStore::new(pool), sampler);
+    let state = AppState::new(
+        PgStore::new(pool),
+        sampler,
+        stub_poi_config(),
+        OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+    );
     api::router(state)
 }
 
 async fn json_body<T: serde::de::DeserializeOwned>(resp: axum::response::Response) -> T {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!("failed to parse JSON: {e}; body = {}", String::from_utf8_lossy(&bytes))
+        panic!(
+            "failed to parse JSON: {e}; body = {}",
+            String::from_utf8_lossy(&bytes)
+        )
     })
 }
 
 #[tokio::test]
 async fn random_keep_reject_flow() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     seed_single_cell(&db.pool, true).await;
     let app = build_router(db.pool.clone()).await;
 
-    let resp = app.clone()
-        .oneshot(Request::builder().uri("/api/bbox/random").body(Body::empty()).unwrap())
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/bbox/random")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -91,7 +119,8 @@ async fn random_keep_reject_flow() {
         "decision": "keep",
     }))
     .unwrap();
-    let resp = app.clone()
+    let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
@@ -107,8 +136,14 @@ async fn random_keep_reject_flow() {
     assert_eq!(reply["ok"], true);
     assert_eq!(reply["total_kept"], 1);
 
-    let resp = app.clone()
-        .oneshot(Request::builder().uri("/api/bbox/kept").body(Body::empty()).unwrap())
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/bbox/kept")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -150,7 +185,9 @@ async fn random_keep_reject_flow() {
 #[case("blended&alpha=0.25")]
 #[tokio::test]
 async fn every_strategy_serves_a_bbox_when_data_present(#[case] qs: &str) {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     seed_single_cell(&db.pool, true).await;
     let app = build_router(db.pool.clone()).await;
 
@@ -172,11 +209,10 @@ async fn every_strategy_serves_a_bbox_when_data_present(#[case] qs: &str) {
 #[case("uniform", StatusCode::OK)]
 #[case("population", StatusCode::OK)]
 #[tokio::test]
-async fn built_strategies_need_built_data(
-    #[case] strategy: &str,
-    #[case] expected: StatusCode,
-) {
-    let Some(db) = common::pg_or_skip().await else { return };
+async fn built_strategies_need_built_data(#[case] strategy: &str, #[case] expected: StatusCode) {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     seed_single_cell(&db.pool, false).await;
     let app = build_router(db.pool.clone()).await;
 
@@ -199,7 +235,9 @@ async fn built_strategies_need_built_data(
 #[case("blended&alpha=not-a-number")]
 #[tokio::test]
 async fn invalid_alpha_returns_400(#[case] qs: &str) {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     seed_single_cell(&db.pool, true).await;
     let app = build_router(db.pool.clone()).await;
 
@@ -224,7 +262,9 @@ async fn invalid_alpha_returns_400(#[case] qs: &str) {
 /// computed per-row weight is tiny and would have exploded the old SQL.
 #[tokio::test]
 async fn blended_survives_tiny_normalised_weights() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     // Totals mirror the production scale (7.8e9 people, 2e18 m³ built);
     // max_pop / max_built match the real 2020 epoch figures so the
     // single seeded cell carries realistic relative mass.
@@ -262,15 +302,27 @@ async fn blended_survives_tiny_normalised_weights() {
 
 #[tokio::test]
 async fn random_without_grid_returns_503() {
-    let Some(db) = common::pg_or_skip().await else { return };
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
     // No seed: grid_meta is empty.
     let sampler = Sampler::from_latest(db.pool.clone()).await.unwrap();
     assert!(sampler.is_none());
-    let state = AppState::new(PgStore::new(db.pool.clone()), sampler);
+    let state = AppState::new(
+        PgStore::new(db.pool.clone()),
+        sampler,
+        stub_poi_config(),
+        OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+    );
     let app = api::router(state);
 
     let resp = app
-        .oneshot(Request::builder().uri("/api/bbox/random").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/api/bbox/random")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);

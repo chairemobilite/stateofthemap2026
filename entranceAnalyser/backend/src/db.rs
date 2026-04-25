@@ -4,9 +4,9 @@
 //! compile time by the `sqlx::migrate!` macro, so the server brings the
 //! schema up to date on every startup without any extra tooling.
 
-use sqlx::PgPool;
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use std::time::Duration;
 
 /// Embedded migrator. Exposed so integration tests can apply the same

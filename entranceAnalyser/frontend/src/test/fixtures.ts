@@ -1,7 +1,7 @@
 //! Shared test fixtures for the bbox shape so individual test files don't
 //! need to repeat (or drift on) the field list.
 
-import type { Bbox, KeptBbox } from '../api';
+import type { Bbox, KeptBbox, Poi } from '../api';
 
 export function makeBbox(overrides: Partial<Bbox> = {}): Bbox {
     return {
@@ -31,5 +31,23 @@ export function makeKeptBbox(overrides: Partial<KeptBbox> = {}): KeptBbox {
     return {
         ...makeBbox(overrides),
         kept_at: overrides.kept_at ?? '2026-04-23T12:00:00Z',
+    };
+}
+
+/**
+ * Sample picked POI. Keeps the same default shape Overpass returns
+ * (`type`, `id`, `lat`, `lon`, `tags`) once mapped to the wire form
+ * defined in `Poi`.
+ *
+ * @param overrides - Fields to override on the base fixture.
+ */
+export function makePoi(overrides: Partial<Poi> = {}): Poi {
+    return {
+        osm_type: 'node',
+        osm_id: 1234,
+        center: [-73.55, 45.55],
+        tags: { shop: 'bakery', name: 'Pain' },
+        group: 'shops',
+        ...overrides,
     };
 }

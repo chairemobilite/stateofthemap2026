@@ -6,15 +6,32 @@
 //! Vite dev server on the same developer machine.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use entrance_analyser_backend::{
     api,
     config::{self, DbKind},
     db,
+    overpass::OverpassClient,
+    poi_config::PoiTagConfig,
     sampler::Sampler,
     storage::PgStore,
 };
 use tower_http::cors::CorsLayer;
+
+/// Path to the POI tag config when `POI_TAGS_PATH` is unset.
+/// Resolved at compile time relative to `CARGO_MANIFEST_DIR`
+/// (= `entranceAnalyser/backend`) so the binary finds the YAML
+/// regardless of which directory the operator launches it from
+/// (`cargo run` from the repo root, from `entranceAnalyser/`, or
+/// the absolute `target/release/...` path all work). Override with
+/// `POI_TAGS_PATH` for deployments where the YAML lives elsewhere.
+const DEFAULT_POI_TAGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../config/poi_tags.yml");
+
+/// Public Overpass endpoint used when `OVERPASS_URL` is unset. The
+/// canonical instance, kept rate-friendly by routing through the
+/// `interpreter` path; operators with their own mirror should override.
+const DEFAULT_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,8 +46,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(s) => println!(
             "sampling from grid_meta: cell_size_km={}, epoch={}, \
              max density = {:.0}/km², built data = {}",
-            s.cell_size_km(), s.epoch(), s.max_density_per_km2(),
-            if s.has_built_data() { "yes" } else { "no (uniform/population only)" },
+            s.cell_size_km(),
+            s.epoch(),
+            s.max_density_per_km2(),
+            if s.has_built_data() {
+                "yes"
+            } else {
+                "no (uniform/population only)"
+            },
         ),
         None => eprintln!(
             "warning: no grid found; /api/bbox/random will return 503 \
@@ -38,7 +61,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     }
 
-    let state = api::AppState::new(PgStore::new(pool), sampler);
+    let poi_tags_path = std::env::var("POI_TAGS_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_POI_TAGS_PATH));
+    let poi_config = PoiTagConfig::load_from_path(&poi_tags_path)?;
+    println!(
+        "loaded POI tag config from {:?}: {} group(s), {} exception(s)",
+        poi_tags_path,
+        poi_config.groups.len(),
+        poi_config.exceptions.len(),
+    );
+
+    let overpass_url =
+        std::env::var("OVERPASS_URL").unwrap_or_else(|_| DEFAULT_OVERPASS_URL.to_string());
+    println!("Overpass endpoint: {overpass_url}");
+    let overpass = OverpassClient::new(overpass_url);
+
+    let state = api::AppState::new(PgStore::new(pool), sampler, poi_config, overpass);
     let app = api::router(state).layer(CorsLayer::permissive());
 
     let addr: SocketAddr = "127.0.0.1:3000".parse().expect("valid socket addr");

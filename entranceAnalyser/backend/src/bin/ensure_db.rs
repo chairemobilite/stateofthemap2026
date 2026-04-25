@@ -57,10 +57,7 @@ async fn database_exists(conn: &mut PgConnection, name: &str) -> Result<bool, sq
 }
 
 fn assert_safe_identifier(name: &str) -> Result<(), String> {
-    let ok = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     if ok {
         Ok(())
     } else {

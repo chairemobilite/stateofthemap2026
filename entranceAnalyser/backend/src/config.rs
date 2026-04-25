@@ -79,7 +79,7 @@ mod tests {
 
     #[rstest]
     #[case("postgres://u:p@h:5432/", "mydb", "postgres://u:p@h:5432/mydb")]
-    #[case("postgres://u:p@h:5432",  "mydb", "postgres://u:p@h:5432/mydb")]
+    #[case("postgres://u:p@h:5432", "mydb", "postgres://u:p@h:5432/mydb")]
     fn url_joins_prefix_and_database(
         #[case] prefix: &str,
         #[case] database: &str,

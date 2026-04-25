@@ -106,3 +106,53 @@ export async function fetchKept(fetchFn: typeof fetch = fetch): Promise<KeptBbox
     const { kept } = await jsonOrThrow<{ kept: KeptBbox[] }>(await fetchFn(`${BASE}/kept`));
     return kept;
 }
+
+/** Matches `OsmType` in `backend/src/overpass.rs`. */
+export type OsmType = 'node' | 'way' | 'relation';
+
+/** One picked POI — mirrors `Poi` in `backend/src/overpass.rs`. */
+export interface Poi {
+    osm_type: OsmType;
+    osm_id: number;
+    /** `[lon, lat]`, GeoJSON order — matches `Bbox.center`. */
+    center: [number, number];
+    /** Raw OSM tags as returned by Overpass. */
+    tags: Record<string, string>;
+    /** Group label resolved against `config/poi_tags.yml`. */
+    group: string;
+}
+
+/** Matches `PoiPickResponse` in `backend/src/api.rs`. `poi` is `null`
+ *  when Overpass ran but matched no feature inside the bbox; absence
+ *  of an entry means the pick has not been requested yet. */
+export interface PoiPickRecord {
+    bbox_id: string;
+    poi: Poi | null;
+}
+
+const ANALYSES_BASE = '/api/analyses';
+
+/**
+ * `POST /api/bbox/kept/:id/poi_pick` — pick (and cache) one POI in a
+ * kept bbox. Idempotent: subsequent calls return the cached pick
+ * without re-rolling the random choice.
+ */
+export async function pickPoi(
+    bboxId: string,
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiPickRecord> {
+    return jsonOrThrow<PoiPickRecord>(
+        await fetchFn(`${BASE}/kept/${bboxId}/poi_pick`, { method: 'POST' }),
+    );
+}
+
+/** `GET /api/analyses/poi_picks` — every cached POI pick on disk, in
+ *  insertion order, so the map can paint markers on load. */
+export async function fetchPoiPicks(
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiPickRecord[]> {
+    const { picks } = await jsonOrThrow<{ picks: PoiPickRecord[] }>(
+        await fetchFn(`${ANALYSES_BASE}/poi_picks`),
+    );
+    return picks;
+}

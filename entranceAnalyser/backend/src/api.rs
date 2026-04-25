@@ -1,46 +1,73 @@
-//! HTTP handlers for `/api/bbox/*`.
+//! HTTP handlers for `/api/*`.
 //!
-//! Three endpoints:
-//! - `GET  /api/bbox/random`   → emit a fresh candidate bbox
-//! - `POST /api/bbox/decision` → keep or reject a previously emitted bbox
-//! - `GET  /api/bbox/kept`     → list every kept bbox
+//! Endpoints:
+//! - `GET  /api/bbox/random`                 → emit a fresh candidate bbox
+//! - `POST /api/bbox/decision`               → keep or reject a previously emitted bbox
+//! - `GET  /api/bbox/kept`                   → list every kept bbox
+//! - `POST /api/bbox/kept/:id/poi_pick`      → pick (and cache) one POI in a kept cell
+//! - `GET  /api/analyses/poi_picks`          → every cached POI pick, by bbox id
 //!
 //! The server is stateless between requests: the client echoes the
 //! full bbox back on decision, which lets us persist it in a single
 //! round-trip and keeps horizontal scaling trivial.
 
+use std::sync::Arc;
+
 use axum::{
-    Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
+    Json, Router,
 };
+use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::bbox::{Bbox, KeptBbox, random_bbox};
+use crate::bbox::{random_bbox, Bbox, KeptBbox};
+use crate::overpass::{OverpassClient, OverpassError, Poi};
+use crate::poi_config::PoiTagConfig;
 use crate::sampler::{SampleError, Sampler, Strategy};
 use crate::storage::PgStore;
 
-/// Shared state: the sampler (optional when no grid has been built yet)
-/// and the kept-bboxes Postgres store.
+/// Shared state: the sampler (optional when no grid has been built
+/// yet), the kept-bboxes Postgres store, the parsed POI tag config,
+/// and the Overpass HTTP client.
+///
+/// `poi_config` is wrapped in `Arc` so per-request `State` clones stay
+/// cheap; `PgStore` and `OverpassClient` already hold internal `Arc`s
+/// (their `pool` / `reqwest::Client`) so cloning them is also cheap.
 #[derive(Clone)]
 pub struct AppState {
     sampler: Option<Sampler>,
     store: PgStore,
+    poi_config: Arc<PoiTagConfig>,
+    overpass: OverpassClient,
 }
 
 impl AppState {
-    pub fn new(store: PgStore, sampler: Option<Sampler>) -> Self {
-        Self { sampler, store }
+    pub fn new(
+        store: PgStore,
+        sampler: Option<Sampler>,
+        poi_config: PoiTagConfig,
+        overpass: OverpassClient,
+    ) -> Self {
+        Self {
+            sampler,
+            store,
+            poi_config: Arc::new(poi_config),
+            overpass,
+        }
     }
 }
 
-/// Mount the `/api/bbox/*` routes on a fresh router.
+/// Mount every public `/api/*` route on a fresh router.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/bbox/random", get(random_handler))
         .route("/api/bbox/decision", post(decision_handler))
         .route("/api/bbox/kept", get(kept_handler))
+        .route("/api/bbox/kept/:id/poi_pick", post(poi_pick_handler))
+        .route("/api/analyses/poi_picks", get(poi_picks_handler))
         .with_state(state)
 }
 
@@ -143,7 +170,10 @@ async fn decision_handler(
         Decision::Keep => state.store.append(req.bbox).await.map_err(internal)?,
         Decision::Reject => state.store.count().await.map_err(internal)?,
     };
-    Ok(Json(DecisionResponse { ok: true, total_kept }))
+    Ok(Json(DecisionResponse {
+        ok: true,
+        total_kept,
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +184,81 @@ pub struct KeptResponse {
 async fn kept_handler(State(state): State<AppState>) -> Result<Json<KeptResponse>, ApiError> {
     let kept = state.store.load().await.map_err(internal)?;
     Ok(Json(KeptResponse { kept }))
+}
+
+/// One picked POI for a given bbox. `poi` is `null` when Overpass
+/// returned no matching feature for the cell — distinct from "we
+/// haven't picked yet", which would not appear in `/poi_picks` at all.
+#[derive(Debug, Serialize)]
+pub struct PoiPickResponse {
+    pub bbox_id: Uuid,
+    pub poi: Option<Poi>,
+}
+
+async fn poi_pick_handler(
+    State(state): State<AppState>,
+    Path(bbox_id): Path<Uuid>,
+) -> Result<Json<PoiPickResponse>, ApiError> {
+    // Cache hit: return the previously-picked POI (or the cached
+    // "empty cell" verdict). Idempotent by design — repeated clicks of
+    // the Pick POI button never re-roll the choice.
+    if let Some(cached) = state.store.read_poi_pick(bbox_id).await.map_err(internal)? {
+        return Ok(Json(PoiPickResponse {
+            bbox_id,
+            poi: cached,
+        }));
+    }
+    // Fresh pick: load the bbox so we can bound the Overpass query.
+    let kept = state
+        .store
+        .get_kept(bbox_id)
+        .await
+        .map_err(internal)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            format!("kept bbox {bbox_id} not found"),
+        ))?;
+    let candidates = state
+        .overpass
+        .fetch_pois(&kept.bbox, &state.poi_config)
+        .await
+        .map_err(overpass_error)?;
+    // Uniform draw across every candidate (regardless of group), per
+    // the locked decision for PR8: one POI total per cell.
+    let chosen = candidates.into_iter().choose(&mut rand::rng());
+    state
+        .store
+        .write_poi_pick(bbox_id, chosen.as_ref())
+        .await
+        .map_err(internal)?;
+    Ok(Json(PoiPickResponse {
+        bbox_id,
+        poi: chosen,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct PoiPicksResponse {
+    pub picks: Vec<PoiPickResponse>,
+}
+
+async fn poi_picks_handler(
+    State(state): State<AppState>,
+) -> Result<Json<PoiPicksResponse>, ApiError> {
+    let raw = state.store.read_all_poi_picks().await.map_err(internal)?;
+    let picks = raw
+        .into_iter()
+        .map(|(bbox_id, poi)| PoiPickResponse { bbox_id, poi })
+        .collect();
+    Ok(Json(PoiPicksResponse { picks }))
+}
+
+/// Map any Overpass-side failure to HTTP 502. We deliberately do not
+/// forward the upstream status code — a 401/403/429 from Overpass is
+/// not a 401/403/429 from *us* and propagating it would mislead the
+/// caller about which service is unhealthy.
+fn overpass_error(err: OverpassError) -> ApiError {
+    (StatusCode::BAD_GATEWAY, format!("overpass: {err}"))
 }
 
 fn internal(err: impl std::fmt::Display) -> ApiError {

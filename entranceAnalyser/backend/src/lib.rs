@@ -11,5 +11,7 @@ pub mod db;
 pub mod geotiff_pop;
 pub mod lzw_transcode;
 pub mod mollweide;
+pub mod overpass;
+pub mod poi_config;
 pub mod sampler;
 pub mod storage;

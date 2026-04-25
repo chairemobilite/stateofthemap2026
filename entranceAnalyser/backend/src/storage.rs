@@ -6,15 +6,22 @@
 //!   geometry alongside the raw coordinates so spatial queries work
 //!   out of the box.
 //! * `analyses` — generic key/value side-table keyed by `(bbox_id, kind)`.
-//!   The entrance-analyser pipeline fills this later; for now the HTTP
-//!   layer only exposes `PgStore::record_analysis` for future use.
+//!   `record_analysis` is the generic upsert; the typed helpers below
+//!   (`get_kept`, `read_poi_pick`, `read_all_poi_picks`,
+//!   `write_poi_pick`) handle the POI-pick step end to end.
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use sqlx::types::Json as SqlxJson;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::bbox::{Bbox, KeptBbox};
+use crate::overpass::Poi;
+
+/// Discriminator stored in `analyses.kind` for the POI-pick step.
+const POI_PICK_KIND: &str = "poi_pick";
 
 /// Thin, clone-friendly handle over the shared Postgres pool.
 #[derive(Debug, Clone)]
@@ -105,6 +112,85 @@ impl PgStore {
         .await?;
         Ok(())
     }
+
+    /// Look up one kept bbox by id. The HTTP handler needs the bbox
+    /// coordinates to bound the Overpass query, so this returns the
+    /// full record rather than just an existence flag.
+    pub async fn get_kept(&self, id: Uuid) -> Result<Option<KeptBbox>, sqlx::Error> {
+        let row: Option<KeptRow> = sqlx::query_as::<_, KeptRow>(
+            "SELECT id, west, south, east, north, center_lon, center_lat, \
+                    cell_size_km, population, density_per_km2, max_density_ratio, \
+                    built_volume, max_built_volume_ratio, kept_at \
+             FROM kept_bboxes WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(KeptRow::into_kept))
+    }
+
+    /// Read the cached POI pick for `bbox_id`, if any.
+    ///
+    /// * `Ok(None)` — no `poi_pick` row yet (caller must run Overpass).
+    /// * `Ok(Some(None))` — analysis ran but no POI matched (cached null).
+    /// * `Ok(Some(Some(poi)))` — a POI was previously picked and cached.
+    pub async fn read_poi_pick(&self, bbox_id: Uuid) -> Result<Option<Option<Poi>>, sqlx::Error> {
+        let row: Option<SqlxJson<PoiPickRecord>> =
+            sqlx::query_scalar("SELECT payload FROM analyses WHERE bbox_id = $1 AND kind = $2")
+                .bind(bbox_id)
+                .bind(POI_PICK_KIND)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|j| j.0.poi))
+    }
+
+    /// Every cached POI pick, paired with its bbox id, ordered by
+    /// insertion time so the UI gets a chronological list. Used by the
+    /// frontend on map load to render which kept cells already have a
+    /// pick.
+    pub async fn read_all_poi_picks(&self) -> Result<Vec<(Uuid, Option<Poi>)>, sqlx::Error> {
+        let rows: Vec<(Uuid, SqlxJson<PoiPickRecord>)> = sqlx::query_as(
+            "SELECT bbox_id, payload FROM analyses \
+             WHERE kind = $1 ORDER BY created_at ASC, bbox_id ASC",
+        )
+        .bind(POI_PICK_KIND)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id, j)| (id, j.0.poi)).collect())
+    }
+
+    /// Persist (or replace) the POI pick for `bbox_id`. `Some(poi)`
+    /// records the picked feature; `None` records a cached "no POI in
+    /// this cell" verdict so the next request short-circuits without
+    /// hitting Overpass.
+    pub async fn write_poi_pick(
+        &self,
+        bbox_id: Uuid,
+        poi: Option<&Poi>,
+    ) -> Result<(), sqlx::Error> {
+        let payload = SqlxJson(PoiPickRecord { poi: poi.cloned() });
+        sqlx::query(
+            "INSERT INTO analyses (bbox_id, kind, value, payload) \
+             VALUES ($1, $2, NULL, $3) \
+             ON CONFLICT (bbox_id, kind) DO UPDATE \
+             SET value = NULL, payload = EXCLUDED.payload, created_at = now()",
+        )
+        .bind(bbox_id)
+        .bind(POI_PICK_KIND)
+        .bind(payload)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// On-disk shape of a `poi_pick` analyses payload. Keeping the wrapper
+/// (rather than serialising `Poi` directly) lets us round-trip
+/// "queried Overpass but matched nothing" as `{ "poi": null }`, which
+/// is distinguishable from a missing row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PoiPickRecord {
+    poi: Option<Poi>,
 }
 
 /// Flat row shape returned by `sqlx::query_as!` — the PostGIS `geom`
@@ -154,7 +240,10 @@ impl KeptRow {
 fn polygon_wkt(b: &Bbox) -> String {
     format!(
         "POLYGON(({w} {s}, {e} {s}, {e} {n}, {w} {n}, {w} {s}))",
-        w = b.west, s = b.south, e = b.east, n = b.north,
+        w = b.west,
+        s = b.south,
+        e = b.east,
+        n = b.north,
     )
 }
 
