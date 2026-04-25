@@ -156,3 +156,74 @@ export async function fetchPoiPicks(
     );
     return picks;
 }
+
+// -------- POI focus map (PR9) ------------------------------------------------
+
+/** Minimal GeoJSON geometry, mirroring `Geometry` in
+ *  `backend/src/poi_focus.rs`. The backend only emits Points (entrances)
+ *  and Polygons with a single outer ring (buildings); both shapes are
+ *  valid drop-ins for a MapLibre `geojson` source. */
+export type FocusGeometry =
+    | { type: 'Point'; coordinates: [number, number] }
+    | { type: 'Polygon'; coordinates: [number, number][][] };
+
+/** Mirrors `Feature` in `backend/src/poi_focus.rs`. `id` is stable
+ *  (`"node/123"`, `"way/456"`) so MapLibre can dedupe on it. */
+export interface FocusFeature {
+    type: 'Feature';
+    id: string;
+    geometry: FocusGeometry;
+    properties: Record<string, string>;
+}
+
+export interface FocusFeatureCollection {
+    type: 'FeatureCollection';
+    features: FocusFeature[];
+}
+
+/** Mirrors `PoiFocusResult` in `backend/src/poi_focus.rs`. `radius_m`
+ *  is echoed by the server so the frontend can draw the buffer ring
+ *  without needing to know the active server config. */
+export interface PoiFocusResult {
+    /** `[lon, lat]`, GeoJSON order — anchor of the `around:` query. */
+    center: [number, number];
+    radius_m: number;
+    buildings: FocusFeatureCollection;
+    entrances: FocusFeatureCollection;
+}
+
+/** Mirrors `PoiFocusResponse` in `backend/src/api.rs`. */
+export interface PoiFocusRecord {
+    bbox_id: string;
+    result: PoiFocusResult;
+}
+
+/**
+ * `POST /api/bbox/kept/:id/poi_focus` — fetch (and cache) the
+ * buildings + entrances around the previously-picked POI.
+ * Idempotent on the server side: subsequent calls return the cached
+ * result without re-querying Overpass.
+ *
+ * Backend returns 409 when no pick has run yet and 422 when the pick
+ * was empty; both surface as a thrown `Error` whose message starts
+ * with the status code, so the caller can distinguish them.
+ */
+export async function pickPoiFocus(
+    bboxId: string,
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiFocusRecord> {
+    return jsonOrThrow<PoiFocusRecord>(
+        await fetchFn(`${BASE}/kept/${bboxId}/poi_focus`, { method: 'POST' }),
+    );
+}
+
+/** `GET /api/analyses/poi_focuses` — every cached focus result on
+ *  disk, in insertion order, for hydrating the map on load. */
+export async function fetchPoiFocuses(
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiFocusRecord[]> {
+    const { focuses } = await jsonOrThrow<{ focuses: PoiFocusRecord[] }>(
+        await fetchFn(`${ANALYSES_BASE}/poi_focuses`),
+    );
+    return focuses;
+}
