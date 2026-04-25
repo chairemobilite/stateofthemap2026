@@ -16,12 +16,23 @@
 //!  - picked POI marker (orange dot, identical to the overview map
 //!    so the visual lineage from the popup is obvious)
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { KeptBbox, Poi, PoiFocusResult } from '../api';
 import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
+import { MapContextMenu, type MapContextMenuItem } from './MapContextMenu';
+import {
+    amapUrl,
+    baiduPanoramaUrl,
+    googleStreetViewUrl,
+    kartaViewUrl,
+    mapillaryUrl,
+    osmEditorUrl,
+    panoramaxUrl,
+    type MapPoint,
+} from './mapLinks';
 import {
     toBufferRing,
     toBuildingsCollection,
@@ -47,6 +58,19 @@ export interface PoiFocusMapProps {
      *  internal effect) so tests can stub it without touching the
      *  network. */
     onLoadFocus: (bboxId: string) => void;
+    /** OSM editor URL template, normally fetched via `useAppConfig`.
+     *  Threaded as a prop instead of read from a hook here so this
+     *  component stays a pure MapLibre wrapper that's easy to test in
+     *  isolation. The `{lat}`, `{lon}`, `{zoom}` placeholders are
+     *  substituted by `mapLinks.osmEditorUrl`. */
+    osmEditorUrlTemplate: string;
+}
+
+/** State for the right-click context menu: where to draw it (in
+ *  canvas-relative CSS pixels) and which geo-coords to deeplink. */
+interface MenuState {
+    position: { x: number; y: number };
+    point: MapPoint;
 }
 
 const BUILDINGS_SOURCE = 'focus-buildings';
@@ -156,11 +180,13 @@ export function PoiFocusMap({
     basemapId,
     onBack,
     onLoadFocus,
+    osmEditorUrlTemplate,
 }: PoiFocusMapProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
     const focusRef = useRef(focus);
     const pickedRef = useRef(pickedPoi);
+    const [menuState, setMenuState] = useState<MenuState | null>(null);
     useEffect(() => {
         focusRef.current = focus;
     });
@@ -204,6 +230,19 @@ export function PoiFocusMap({
             installFocusLayers(map, pickedRef.current, focusRef.current);
         });
         map.on('error', (e) => console.error('[MapLibre]', e.error ?? e));
+        // Right-click → open the "open in …" menu at the click point.
+        // `e.point` is canvas-local CSS pixels, which matches the
+        // absolute positioning of `<MapContextMenu>` because it sits
+        // inside the same positioned ancestor as the canvas. We call
+        // `preventDefault()` so the browser's native menu doesn't
+        // briefly flash before ours appears.
+        map.on('contextmenu', (e) => {
+            e.preventDefault();
+            setMenuState({
+                position: { x: e.point.x, y: e.point.y },
+                point: { lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: map.getZoom() },
+            });
+        });
 
         return () => {
             map.remove();
@@ -211,6 +250,24 @@ export function PoiFocusMap({
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Build the menu items lazily — only when there's a click to
+    // service. Template substitution and datum conversion are cheap,
+    // but recomputing them once per re-render still wastes work in
+    // the common "no menu open" case.
+    const menuItems = useMemo<MapContextMenuItem[]>(() => {
+        if (menuState === null) return [];
+        const p = menuState.point;
+        return [
+            { key: 'mapillary', label: 'Open in Mapillary', href: mapillaryUrl(p) },
+            { key: 'panoramax', label: 'Open in Panoramax', href: panoramaxUrl(p) },
+            { key: 'kartaview', label: 'Open in KartaView', href: kartaViewUrl(p) },
+            { key: 'gsv', label: 'Open in Google Street View', href: googleStreetViewUrl(p) },
+            { key: 'baidu', label: 'Open in Baidu (百度地图)', href: baiduPanoramaUrl(p) },
+            { key: 'amap', label: 'Open in AMap (高德地图)', href: amapUrl(p) },
+            { key: 'osm', label: 'Edit on OpenStreetMap', href: osmEditorUrl(osmEditorUrlTemplate, p) },
+        ];
+    }, [menuState, osmEditorUrlTemplate]);
 
     // Basemap swap path mirrors KeptBboxesMap exactly.
     const lastBasemapRef = useRef<BasemapId>(basemapId);
@@ -274,11 +331,18 @@ export function PoiFocusMap({
                 )}
             </header>
 
-            <div
-                ref={containerRef}
-                className="poi-focus-map__canvas"
-                data-testid="poi-focus-map"
-            />
+            <div className="poi-focus-map__canvas">
+                <div
+                    ref={containerRef}
+                    className="poi-focus-map__canvas-inner"
+                    data-testid="poi-focus-map"
+                />
+                <MapContextMenu
+                    position={menuState?.position ?? null}
+                    items={menuItems}
+                    onDismiss={() => setMenuState(null)}
+                />
+            </div>
 
             {loading && <p className="poi-focus-map__status">Loading buildings &amp; entrances…</p>}
             {error && (
