@@ -21,6 +21,7 @@ backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
            src/storage.rs                          PgStore: kept_bboxes + analyses
            src/poi_config.rs                       poi_tags.yml loader (groups + exceptions)
            src/overpass.rs                         Overpass QL client + result decoder
+           src/poi_focus.rs                        focus-map fetcher (buildings + entrances)
            src/bin/build_grid.rs                   offline aggregation tool
 config/    Runtime config consumed by the analysis pipeline
            poi_tags.yml                            POI tag groups + exceptions
@@ -38,6 +39,8 @@ The HTTP backend serves these endpoints:
 | GET    | `/api/bbox/kept`                            | list every persisted kept bbox                                   |
 | POST   | `/api/bbox/kept/:id/poi_pick`               | pick (and cache) one POI inside a kept bbox via Overpass         |
 | GET    | `/api/analyses/poi_picks`                   | list every cached POI pick, in insertion order                   |
+| POST   | `/api/bbox/kept/:id/poi_focus`              | fetch (and cache) buildings + entrances around the picked POI    |
+| GET    | `/api/analyses/poi_focuses`                 | list every cached focus result, in insertion order               |
 
 ### Sampling strategies
 
@@ -246,6 +249,38 @@ environment variable; it defaults to the public
 `https://overpass-api.de/api/interpreter` when unset. Operators
 running heavy batches should point this at a self-hosted mirror or
 a community alternate.
+
+## POI focus map
+
+Once a POI has been picked for a kept cell, `POST
+/api/bbox/kept/:id/poi_focus` queries Overpass a second time for
+every `way[building]` and `node[entrance]` within an `around:`
+buffer of the picked feature, and returns them as two GeoJSON
+`FeatureCollection`s — ready to drop into MapLibre `geojson`
+sources. The result is cached in `analyses` with `kind='poi_focus'`
+so the next click is instant.
+
+Scope decisions, all reversible without schema changes:
+
+- **Ways for buildings, not relations.** Multipolygon `building`
+  relations are rare and decoding their `out geom` members is
+  significantly more involved; the first cut under-counts them
+  intentionally.
+- **`entrance=*` nodes only**, not `door=*`. The mapping question
+  is whether buildings have *entrances* mapped, not whether
+  interior doors carry a tag.
+- **Buffer radius is server-config.** `POI_FOCUS_RADIUS_M`
+  (default `150`) is read once at startup; every cached row echoes
+  the radius it was fetched with, so changing the value affects
+  new requests only.
+
+The endpoint returns:
+
+- `200 OK` with the focus result on success (cached or fresh).
+- `409 Conflict` if `/poi_pick` has not run for this bbox yet.
+- `422 Unprocessable Entity` if `/poi_pick` ran but the cell was
+  empty — there's no POI to anchor the focus map on.
+- `502 Bad Gateway` if Overpass is unhealthy (matching `/poi_pick`).
 
 ## Tests
 
