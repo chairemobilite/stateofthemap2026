@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
+    fetchAppConfig,
     fetchKept,
     fetchPoiFocuses,
     fetchPoiPicks,
@@ -8,6 +9,7 @@ import {
     pickPoi,
     pickPoiFocus,
     submitDecision,
+    type AppConfig,
     type KeptBbox,
     type Poi,
     type PoiFocusResult,
@@ -179,5 +181,15 @@ describe('api client', () => {
         const fetchFn = jsonFetch({ focuses });
         expect(await fetchPoiFocuses(fetchFn)).toEqual(focuses);
         expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_focuses');
+    });
+
+    it('fetchAppConfig hits /api/config and returns the parsed body', async () => {
+        const config: AppConfig = {
+            osm_editor_url: 'https://example.org/edit?lat={lat}&lon={lon}&z={zoom}',
+            poi_focus_radius_m: 250,
+        };
+        const fetchFn = jsonFetch(config);
+        expect(await fetchAppConfig(fetchFn)).toEqual(config);
+        expect(fetchFn).toHaveBeenCalledWith('/api/config');
     });
 });
