@@ -19,10 +19,14 @@ use entrance_analyser_backend::{
 };
 use tower_http::cors::CorsLayer;
 
-/// Path to the POI tag config when `POI_TAGS_PATH` is unset. Resolved
-/// relative to the process's current directory so `cargo run -p
-/// entrance-analyser-backend` from the repo root just works.
-const DEFAULT_POI_TAGS_PATH: &str = "entranceAnalyser/config/poi_tags.yml";
+/// Path to the POI tag config when `POI_TAGS_PATH` is unset.
+/// Resolved at compile time relative to `CARGO_MANIFEST_DIR`
+/// (= `entranceAnalyser/backend`) so the binary finds the YAML
+/// regardless of which directory the operator launches it from
+/// (`cargo run` from the repo root, from `entranceAnalyser/`, or
+/// the absolute `target/release/...` path all work). Override with
+/// `POI_TAGS_PATH` for deployments where the YAML lives elsewhere.
+const DEFAULT_POI_TAGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../config/poi_tags.yml");
 
 /// Public Overpass endpoint used when `OVERPASS_URL` is unset. The
 /// canonical instance, kept rate-friendly by routing through the
