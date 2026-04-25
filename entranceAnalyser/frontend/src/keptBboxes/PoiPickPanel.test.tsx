@@ -71,4 +71,39 @@ describe('<PoiPickPanel />', () => {
         expect(screen.getByText('node 99')).toBeInTheDocument();
         expect(screen.getByText('amenity=bench')).toBeInTheDocument();
     });
+
+    it.each([
+        { name: 'no pick yet', pickedPoi: undefined },
+        { name: 'picked-empty', pickedPoi: null },
+    ])(
+        'omits the "Open focus map" button when there is no real POI ($name)',
+        ({ pickedPoi }) => {
+            renderPanel({ pickedPoi, onOpenFocus: vi.fn() });
+            expect(screen.queryByRole('button', { name: /open focus map/i })).not.toBeInTheDocument();
+        },
+    );
+
+    it('omits the "Open focus map" button when no onOpenFocus handler is provided', () => {
+        renderPanel({ pickedPoi: makePoi() });
+        expect(screen.queryByRole('button', { name: /open focus map/i })).not.toBeInTheDocument();
+    });
+
+    it('shows an enabled "Open focus map" button when a POI is picked', () => {
+        const onOpenFocus = vi.fn();
+        renderPanel({ bboxId: 'bbox-7', pickedPoi: makePoi(), onOpenFocus });
+        const button = screen.getByRole('button', { name: 'Open focus map' });
+        expect((button as HTMLButtonElement).disabled).toBe(false);
+        fireEvent.click(button);
+        expect(onOpenFocus).toHaveBeenCalledExactlyOnceWith('bbox-7');
+    });
+
+    it('flips the "Open focus map" button to a disabled "Loading…" while the focus load is in flight', () => {
+        renderPanel({
+            pickedPoi: makePoi(),
+            onOpenFocus: vi.fn(),
+            isOpeningFocus: true,
+        });
+        const button = screen.getByRole('button', { name: 'Loading…' });
+        expect((button as HTMLButtonElement).disabled).toBe(true);
+    });
 });
