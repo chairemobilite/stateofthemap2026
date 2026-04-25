@@ -6,6 +6,8 @@
 //! - `GET  /api/bbox/kept`                   → list every kept bbox
 //! - `POST /api/bbox/kept/:id/poi_pick`      → pick (and cache) one POI in a kept cell
 //! - `GET  /api/analyses/poi_picks`          → every cached POI pick, by bbox id
+//! - `POST /api/bbox/kept/:id/poi_focus`     → fetch (and cache) buildings + entrances around the picked POI
+//! - `GET  /api/analyses/poi_focuses`        → every cached focus result, by bbox id
 //!
 //! The server is stateless between requests: the client echoes the
 //! full bbox back on decision, which lets us persist it in a single
@@ -26,12 +28,13 @@ use uuid::Uuid;
 use crate::bbox::{random_bbox, Bbox, KeptBbox};
 use crate::overpass::{OverpassClient, OverpassError, Poi};
 use crate::poi_config::PoiTagConfig;
+use crate::poi_focus::{fetch_focus, PoiFocusResult};
 use crate::sampler::{SampleError, Sampler, Strategy};
 use crate::storage::PgStore;
 
 /// Shared state: the sampler (optional when no grid has been built
 /// yet), the kept-bboxes Postgres store, the parsed POI tag config,
-/// and the Overpass HTTP client.
+/// the Overpass HTTP client, and the focus-map buffer radius.
 ///
 /// `poi_config` is wrapped in `Arc` so per-request `State` clones stay
 /// cheap; `PgStore` and `OverpassClient` already hold internal `Arc`s
@@ -42,6 +45,11 @@ pub struct AppState {
     store: PgStore,
     poi_config: Arc<PoiTagConfig>,
     overpass: OverpassClient,
+    /// `around:` buffer (m) used by the `/poi_focus` endpoint. Read
+    /// from `POI_FOCUS_RADIUS_M` at startup; constant after that so
+    /// every cached row in `analyses.payload.radius_m` reflects the
+    /// active server config.
+    focus_radius_m: u32,
 }
 
 impl AppState {
@@ -50,12 +58,14 @@ impl AppState {
         sampler: Option<Sampler>,
         poi_config: PoiTagConfig,
         overpass: OverpassClient,
+        focus_radius_m: u32,
     ) -> Self {
         Self {
             sampler,
             store,
             poi_config: Arc::new(poi_config),
             overpass,
+            focus_radius_m,
         }
     }
 }
@@ -68,6 +78,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bbox/kept", get(kept_handler))
         .route("/api/bbox/kept/:id/poi_pick", post(poi_pick_handler))
         .route("/api/analyses/poi_picks", get(poi_picks_handler))
+        .route("/api/bbox/kept/:id/poi_focus", post(poi_focus_handler))
+        .route("/api/analyses/poi_focuses", get(poi_focuses_handler))
         .with_state(state)
 }
 
@@ -251,6 +263,76 @@ async fn poi_picks_handler(
         .map(|(bbox_id, poi)| PoiPickResponse { bbox_id, poi })
         .collect();
     Ok(Json(PoiPicksResponse { picks }))
+}
+
+/// One focus result for a given bbox. The `result` field is always
+/// populated when present; an empty area is encoded as empty
+/// FeatureCollections inside [`PoiFocusResult`], not by omitting the
+/// row.
+#[derive(Debug, Serialize)]
+pub struct PoiFocusResponse {
+    pub bbox_id: Uuid,
+    pub result: PoiFocusResult,
+}
+
+async fn poi_focus_handler(
+    State(state): State<AppState>,
+    Path(bbox_id): Path<Uuid>,
+) -> Result<Json<PoiFocusResponse>, ApiError> {
+    // Cache hit: the focus result is recorded once per bbox and
+    // re-read on every subsequent click. Idempotent by design,
+    // matching `/poi_pick`.
+    if let Some(cached) = state
+        .store
+        .read_poi_focus(bbox_id)
+        .await
+        .map_err(internal)?
+    {
+        return Ok(Json(PoiFocusResponse {
+            bbox_id,
+            result: cached,
+        }));
+    }
+    // Focus map is anchored on the previously-picked POI; require
+    // that step to have run first, with a non-null pick.
+    let pick = state
+        .store
+        .read_poi_pick(bbox_id)
+        .await
+        .map_err(internal)?
+        .ok_or((
+            StatusCode::CONFLICT,
+            format!("bbox {bbox_id} has no POI pick yet — run /poi_pick first"),
+        ))?;
+    let pick = pick.ok_or((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        format!("bbox {bbox_id} was picked but contained no POI — nothing to focus on"),
+    ))?;
+    let result = fetch_focus(&state.overpass, pick.center, state.focus_radius_m)
+        .await
+        .map_err(overpass_error)?;
+    state
+        .store
+        .write_poi_focus(bbox_id, &result)
+        .await
+        .map_err(internal)?;
+    Ok(Json(PoiFocusResponse { bbox_id, result }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct PoiFocusesResponse {
+    pub focuses: Vec<PoiFocusResponse>,
+}
+
+async fn poi_focuses_handler(
+    State(state): State<AppState>,
+) -> Result<Json<PoiFocusesResponse>, ApiError> {
+    let raw = state.store.read_all_poi_focuses().await.map_err(internal)?;
+    let focuses = raw
+        .into_iter()
+        .map(|(bbox_id, result)| PoiFocusResponse { bbox_id, result })
+        .collect();
+    Ok(Json(PoiFocusesResponse { focuses }))
 }
 
 /// Map any Overpass-side failure to HTTP 502. We deliberately do not

@@ -7,8 +7,12 @@
 //!   out of the box.
 //! * `analyses` — generic key/value side-table keyed by `(bbox_id, kind)`.
 //!   `record_analysis` is the generic upsert; the typed helpers below
-//!   (`get_kept`, `read_poi_pick`, `read_all_poi_picks`,
-//!   `write_poi_pick`) handle the POI-pick step end to end.
+//!   handle the two analysis steps end to end:
+//!   - `kind='poi_pick'` (`get_kept`, `read_poi_pick`, `read_all_poi_picks`,
+//!     `write_poi_pick`) — picks one POI per cell.
+//!   - `kind='poi_focus'` (`read_poi_focus`, `read_all_poi_focuses`,
+//!     `write_poi_focus`) — caches the buildings + entrances around the
+//!     picked POI.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -19,9 +23,13 @@ use uuid::Uuid;
 
 use crate::bbox::{Bbox, KeptBbox};
 use crate::overpass::Poi;
+use crate::poi_focus::PoiFocusResult;
 
 /// Discriminator stored in `analyses.kind` for the POI-pick step.
 const POI_PICK_KIND: &str = "poi_pick";
+
+/// Discriminator stored in `analyses.kind` for the POI-focus step.
+const POI_FOCUS_KIND: &str = "poi_focus";
 
 /// Thin, clone-friendly handle over the shared Postgres pool.
 #[derive(Debug, Clone)]
@@ -178,6 +186,64 @@ impl PgStore {
         .bind(bbox_id)
         .bind(POI_PICK_KIND)
         .bind(payload)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Read the cached POI-focus result for `bbox_id`, if any.
+    ///
+    /// Returns `Ok(None)` when no `poi_focus` row exists yet (caller
+    /// must run Overpass). Unlike `read_poi_pick`, the result is
+    /// always populated when the row exists — empty surroundings are
+    /// represented by empty `FeatureCollection`s, not by a missing
+    /// row.
+    pub async fn read_poi_focus(
+        &self,
+        bbox_id: Uuid,
+    ) -> Result<Option<PoiFocusResult>, sqlx::Error> {
+        let row: Option<SqlxJson<PoiFocusResult>> =
+            sqlx::query_scalar("SELECT payload FROM analyses WHERE bbox_id = $1 AND kind = $2")
+                .bind(bbox_id)
+                .bind(POI_FOCUS_KIND)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|j| j.0))
+    }
+
+    /// Every cached POI-focus result, paired with its bbox id, ordered
+    /// by insertion time so the frontend can hydrate its in-memory map
+    /// in chronological order on load.
+    pub async fn read_all_poi_focuses(&self) -> Result<Vec<(Uuid, PoiFocusResult)>, sqlx::Error> {
+        let rows: Vec<(Uuid, SqlxJson<PoiFocusResult>)> = sqlx::query_as(
+            "SELECT bbox_id, payload FROM analyses \
+             WHERE kind = $1 ORDER BY created_at ASC, bbox_id ASC",
+        )
+        .bind(POI_FOCUS_KIND)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id, j)| (id, j.0)).collect())
+    }
+
+    /// Persist (or replace) the POI-focus result for `bbox_id`. The
+    /// payload always exists; "no buildings or entrances within the
+    /// radius" is encoded as empty FeatureCollections, not as a
+    /// missing row, so the next click short-circuits without hitting
+    /// Overpass either way.
+    pub async fn write_poi_focus(
+        &self,
+        bbox_id: Uuid,
+        focus: &PoiFocusResult,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO analyses (bbox_id, kind, value, payload) \
+             VALUES ($1, $2, NULL, $3) \
+             ON CONFLICT (bbox_id, kind) DO UPDATE \
+             SET value = NULL, payload = EXCLUDED.payload, created_at = now()",
+        )
+        .bind(bbox_id)
+        .bind(POI_FOCUS_KIND)
+        .bind(SqlxJson(focus))
         .execute(&self.pool)
         .await?;
         Ok(())

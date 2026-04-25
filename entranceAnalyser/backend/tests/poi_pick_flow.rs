@@ -52,6 +52,10 @@ async fn build_router(pool: sqlx::PgPool, overpass_url: String) -> axum::Router 
         sampler,
         PoiTagConfig::from_yaml_str(POI_TAGS_YAML).unwrap(),
         OverpassClient::new(overpass_url),
+        // Focus radius is irrelevant to the poi_pick flow, but the
+        // AppState constructor requires it — pass the production
+        // default so tests stay representative.
+        150,
     );
     api::router(state)
 }

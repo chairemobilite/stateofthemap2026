@@ -33,7 +33,10 @@ pub enum OsmType {
 }
 
 impl OsmType {
-    fn from_overpass(raw: &str) -> Option<Self> {
+    /// Decode the `type` field of one Overpass element. Visible to
+    /// sibling crate modules (e.g. `poi_focus`) so they can route on
+    /// element kind without re-implementing the lookup.
+    pub(crate) fn from_overpass(raw: &str) -> Option<Self> {
         match raw {
             "node" => Some(Self::Node),
             "way" => Some(Self::Way),
@@ -102,7 +105,24 @@ impl OverpassClient {
         bbox: &Bbox,
         config: &PoiTagConfig,
     ) -> Result<Vec<Poi>, OverpassError> {
-        let ql = build_query(bbox, config);
+        let parsed: OverpassResponse = self.execute_ql(&build_query(bbox, config)).await?;
+        Ok(parsed
+            .elements
+            .into_iter()
+            .filter_map(|raw| raw.into_poi(config))
+            .collect())
+    }
+
+    /// POST a raw Overpass QL query and decode the response as `T`.
+    ///
+    /// Centralises the transport concerns (form encoding, HTTP status
+    /// check, JSON decode) so callers can focus on building the query
+    /// and shaping the typed response. Public to the crate so sibling
+    /// modules (e.g. `poi_focus`) reuse the same configured client.
+    pub(crate) async fn execute_ql<T: serde::de::DeserializeOwned>(
+        &self,
+        ql: &str,
+    ) -> Result<T, OverpassError> {
         let response = self
             .http
             .post(&self.url)
@@ -119,13 +139,7 @@ impl OverpassClient {
                 body,
             });
         }
-
-        let parsed: OverpassResponse = response.json().await.map_err(OverpassError::Decode)?;
-        Ok(parsed
-            .elements
-            .into_iter()
-            .filter_map(|raw| raw.into_poi(config))
-            .collect())
+        response.json().await.map_err(OverpassError::Decode)
     }
 }
 

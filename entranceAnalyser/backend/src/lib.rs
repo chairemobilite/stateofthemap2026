@@ -13,5 +13,6 @@ pub mod lzw_transcode;
 pub mod mollweide;
 pub mod overpass;
 pub mod poi_config;
+pub mod poi_focus;
 pub mod sampler;
 pub mod storage;

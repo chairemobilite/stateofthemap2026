@@ -33,6 +33,13 @@ const DEFAULT_POI_TAGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../con
 /// `interpreter` path; operators with their own mirror should override.
 const DEFAULT_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 
+/// `around:` buffer (m) used by `/poi_focus` when
+/// `POI_FOCUS_RADIUS_M` is unset. 150 m is roughly a city block in
+/// most of the world — wide enough to include the building containing
+/// the POI plus a few neighbours, narrow enough to keep the
+/// MapLibre source small.
+const DEFAULT_POI_FOCUS_RADIUS_M: u32 = 150;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config::load_dotenv();
@@ -77,7 +84,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Overpass endpoint: {overpass_url}");
     let overpass = OverpassClient::new(overpass_url);
 
-    let state = api::AppState::new(PgStore::new(pool), sampler, poi_config, overpass);
+    let focus_radius_m = std::env::var("POI_FOCUS_RADIUS_M")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_POI_FOCUS_RADIUS_M);
+    println!("POI focus radius: {focus_radius_m} m");
+
+    let state = api::AppState::new(
+        PgStore::new(pool),
+        sampler,
+        poi_config,
+        overpass,
+        focus_radius_m,
+    );
     let app = api::router(state).layer(CorsLayer::permissive());
 
     let addr: SocketAddr = "127.0.0.1:3000".parse().expect("valid socket addr");
