@@ -33,7 +33,10 @@ pub enum OsmType {
 }
 
 impl OsmType {
-    fn from_overpass(raw: &str) -> Option<Self> {
+    /// Decode the `type` field of one Overpass element. Visible to
+    /// sibling crate modules (e.g. `poi_focus`) so they can route on
+    /// element kind without re-implementing the lookup.
+    pub(crate) fn from_overpass(raw: &str) -> Option<Self> {
         match raw {
             "node" => Some(Self::Node),
             "way" => Some(Self::Way),
