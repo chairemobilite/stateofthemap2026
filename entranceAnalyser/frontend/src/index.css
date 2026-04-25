@@ -402,3 +402,101 @@ body {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.8rem;
 }
+
+.poi-pick-panel__focus-button {
+    width: 100%;
+    margin-top: 0.55rem;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid #f97316;
+    border-radius: 6px;
+    background: #fff;
+    color: #c2410c;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.poi-pick-panel__focus-button:hover:not(:disabled) {
+    background: #fff7ed;
+}
+
+.poi-pick-panel__focus-button:disabled {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+/* Focus map view --------------------------------------------------------- */
+
+.poi-focus-map {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.poi-focus-map__header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.95);
+    border-bottom: 1px solid #e4e4e7;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+    z-index: 2;
+}
+
+.poi-focus-map__back {
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    padding: 0.3rem 0.7rem;
+    font: inherit;
+    cursor: pointer;
+    background: #fff;
+}
+
+.poi-focus-map__back:hover {
+    background: #f4f4f5;
+}
+
+.poi-focus-map__title {
+    flex: 1;
+    font-size: 0.9rem;
+}
+
+.poi-focus-map__group {
+    color: #555;
+    font-size: 0.8rem;
+}
+
+.poi-focus-map__counts {
+    display: flex;
+    gap: 0.85rem;
+    font-size: 0.8rem;
+    color: #3f3f46;
+    font-variant-numeric: tabular-nums;
+}
+
+.poi-focus-map__canvas {
+    flex: 1;
+    position: relative;
+}
+
+.poi-focus-map__status,
+.poi-focus-map__error {
+    position: absolute;
+    top: 4rem;
+    left: 1rem;
+    z-index: 1;
+    margin: 0;
+    padding: 0.4rem 0.75rem;
+    background: rgba(255, 255, 255, 0.94);
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    font-size: 0.85rem;
+    color: #111;
+}
+
+.poi-focus-map__error {
+    background: #fee2e2;
+    color: #991b1b;
+}
