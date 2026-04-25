@@ -25,9 +25,12 @@ backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
            src/bin/build_grid.rs                   offline aggregation tool
 config/    Runtime config consumed by the analysis pipeline
            poi_tags.yml                            POI tag groups + exceptions
-frontend/  React + Vite + MapLibre GL — two screens:
+frontend/  React + Vite + MapLibre GL — three screens:
            src/                                    Sampling screen (keep/reject + strategy)
-           src/keptBboxes/                         Kept-bboxes overview map + popup row + POI picker
+           src/keptBboxes/                         Kept-bboxes overview map + popup + POI picker
+           src/keptBboxes/PoiFocusMap.tsx          Focus map (buildings + entrances around picked POI)
+           src/keptBboxes/usePoiFocus.ts           Hook owning the focus state (bulk hydrate + POST)
+           src/keptBboxes/poiFocusGeoJson.ts       Pure helpers: buffer ring + collection casts
 ```
 
 The HTTP backend serves these endpoints:
@@ -203,13 +206,15 @@ Open <http://127.0.0.1:5173>. The backend picks the most recently
 built `(cell_size_km, epoch)` from `grid_meta` at startup and samples
 from the matching `grid_cells` on every `/api/bbox/random` call.
 
-The UI has two screens, switched via the tab pair floating at the top
-of the viewport:
+The UI has three screens. The `Sampling` and `Kept bboxes` tabs sit
+at the top of the viewport; `Focus` is reached from the popup of any
+kept bbox that already has a picked POI:
 
 | Screen         | What it does                                                                                                        |
 |----------------|---------------------------------------------------------------------------------------------------------------------|
 | `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
 | `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. The popup hosts a **Pick POI** button that runs the Overpass picker on demand; picked features paint as orange dots. |
+| `Focus`        | Zoom-in map anchored on one picked POI: building polygons, entrance markers, and a dashed buffer ring at the server-config radius. Reached via the **Open focus map** button in the popup; **Back** returns to the overview. |
 
 The `Kept bboxes` map uses a single GeoJSON source per geometry type
 (polygons for the rectangles, points for the low-zoom markers) so the
@@ -281,6 +286,17 @@ The endpoint returns:
 - `422 Unprocessable Entity` if `/poi_pick` ran but the cell was
   empty — there's no POI to anchor the focus map on.
 - `502 Bad Gateway` if Overpass is unhealthy (matching `/poi_pick`).
+
+On the frontend, [`usePoiFocus`](frontend/src/keptBboxes/usePoiFocus.ts)
+mirrors `usePoiPicks` (`loading | idle | error` status, in-flight
+set, injectable fetchers) and bulk-hydrates from
+`/api/analyses/poi_focuses` on mount, so re-opening the same focus
+map is instant. The popup's **Open focus map** button only renders
+once a real POI is cached (i.e. not the empty-cell case), since the
+Overpass `around:` filter needs a centre coordinate. Switching between
+focus maps re-mounts [`PoiFocusMap`](frontend/src/keptBboxes/PoiFocusMap.tsx)
+on `bbox.id` so the new buffer ring frames cleanly instead of
+pan-animating across the world.
 
 ## Tests
 

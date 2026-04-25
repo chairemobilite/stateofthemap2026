@@ -51,6 +51,11 @@ export interface KeptBboxesMapProps {
     picking: Set<string>;
     /** Triggered by the "Pick POI" button inside the popup. */
     onPickPoi: (bboxId: string) => void;
+    /** Triggered by the "Open focus map" button inside the popup.
+     *  Optional: when omitted, the popup hides the button entirely. */
+    onOpenFocus?: (bboxId: string) => void;
+    /** Bbox ids currently fetching a focus payload. */
+    openingFocus?: Set<string>;
 }
 
 const POLY_SOURCE = 'kept-polygons';
@@ -144,6 +149,8 @@ function updatePoiSource(map: MapLibreMap, picks: Record<string, Poi | null>) {
     if (source) source.setData(toPoiCollection(picks));
 }
 
+const EMPTY_OPENING_FOCUS: Set<string> = new Set();
+
 export function KeptBboxesMap({
     keptBboxes,
     basemapId,
@@ -152,6 +159,8 @@ export function KeptBboxesMap({
     picks,
     picking,
     onPickPoi,
+    onOpenFocus,
+    openingFocus = EMPTY_OPENING_FOCUS,
 }: KeptBboxesMapProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
@@ -162,6 +171,8 @@ export function KeptBboxesMap({
     const picksRef = useRef(picks);
     const pickingRef = useRef(picking);
     const onPickPoiRef = useRef(onPickPoi);
+    const onOpenFocusRef = useRef(onOpenFocus);
+    const openingFocusRef = useRef(openingFocus);
     useEffect(() => {
         keptRef.current = keptBboxes;
     });
@@ -173,6 +184,12 @@ export function KeptBboxesMap({
     });
     useEffect(() => {
         onPickPoiRef.current = onPickPoi;
+    });
+    useEffect(() => {
+        onOpenFocusRef.current = onOpenFocus;
+    });
+    useEffect(() => {
+        openingFocusRef.current = openingFocus;
     });
 
     // Track whether fit-bounds has already run, so reloads via the
@@ -191,12 +208,17 @@ export function KeptBboxesMap({
      * pick state from refs so callers don't have to thread props in.
      */
     const renderPopupBody = (root: Root, bbox: KeptBbox) => {
+        const handleOpenFocus = onOpenFocusRef.current
+            ? (id: string) => onOpenFocusRef.current!(id)
+            : undefined;
         root.render(
             <KeptBboxPopup
                 bbox={bbox}
                 pickedPoi={picksRef.current[bbox.id]}
                 isPicking={pickingRef.current.has(bbox.id)}
                 onPick={(id) => onPickPoiRef.current(id)}
+                onOpenFocus={handleOpenFocus}
+                isOpeningFocus={openingFocusRef.current.has(bbox.id)}
             />,
         );
     };
@@ -334,7 +356,7 @@ export function KeptBboxesMap({
         if (!root || !openId) return;
         const bbox = keptBboxes.find((b) => b.id === openId);
         if (bbox) renderPopupBody(root, bbox);
-    }, [picks, picking, keptBboxes]);
+    }, [picks, picking, openingFocus, keptBboxes]);
 
     return (
         <div className="kept-bboxes-map">

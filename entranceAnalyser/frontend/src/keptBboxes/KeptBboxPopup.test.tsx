@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 import { makeKeptBbox, makePoi } from '../test/fixtures';
 import { KeptBboxPopup } from './KeptBboxPopup';
@@ -39,5 +39,21 @@ describe('<KeptBboxPopup />', () => {
         expect(screen.getByText('Pain')).toBeInTheDocument();
         expect(screen.getByText('shops')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /pick poi/i })).not.toBeInTheDocument();
+    });
+
+    it('forwards onOpenFocus(bboxId) from the picked-state focus button', () => {
+        const onOpenFocus = vi.fn();
+        const bbox = makeKeptBbox({ id: 'bbox-42' });
+        render(
+            <KeptBboxPopup
+                bbox={bbox}
+                pickedPoi={makePoi()}
+                isPicking={false}
+                onPick={noop}
+                onOpenFocus={onOpenFocus}
+            />,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'Open focus map' }));
+        expect(onOpenFocus).toHaveBeenCalledExactlyOnceWith('bbox-42');
     });
 });

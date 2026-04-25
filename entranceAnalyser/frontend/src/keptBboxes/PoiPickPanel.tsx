@@ -23,6 +23,15 @@ export interface PoiPickPanelProps {
     /** True while this specific bbox's pick request is in flight. */
     isPicking: boolean;
     onPick: (bboxId: string) => void;
+    /** Optional handler that opens the POI focus map. The button is
+     *  rendered (and enabled) only when a real POI was picked, since
+     *  the focus query is anchored on the pick's centre coords.
+     *  Omitting the handler omits the button — keeps the panel
+     *  reusable in surfaces that don't have a focus view. */
+    onOpenFocus?: (bboxId: string) => void;
+    /** True while this bbox's focus load is in flight, so the button
+     *  can flip to "Loading…" without leaving the popup. */
+    isOpeningFocus?: boolean;
 }
 
 /** Minimal fallback when `tags.name` is missing — keeps the panel
@@ -48,7 +57,14 @@ function highlightTag(poi: Poi): string | null {
     return null;
 }
 
-export function PoiPickPanel({ bboxId, pickedPoi, isPicking, onPick }: PoiPickPanelProps) {
+export function PoiPickPanel({
+    bboxId,
+    pickedPoi,
+    isPicking,
+    onPick,
+    onOpenFocus,
+    isOpeningFocus = false,
+}: PoiPickPanelProps) {
     const hasPicked = pickedPoi !== undefined;
 
     if (!hasPicked) {
@@ -98,6 +114,16 @@ export function PoiPickPanel({ bboxId, pickedPoi, isPicking, onPick }: PoiPickPa
                     </a>
                 </dd>
             </dl>
+            {onOpenFocus && (
+                <button
+                    type="button"
+                    className="poi-pick-panel__focus-button"
+                    onClick={() => onOpenFocus(bboxId)}
+                    disabled={isOpeningFocus}
+                >
+                    {isOpeningFocus ? 'Loading…' : 'Open focus map'}
+                </button>
+            )}
         </div>
     );
 }

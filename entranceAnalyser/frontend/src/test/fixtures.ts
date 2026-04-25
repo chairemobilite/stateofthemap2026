@@ -1,7 +1,7 @@
 //! Shared test fixtures for the bbox shape so individual test files don't
 //! need to repeat (or drift on) the field list.
 
-import type { Bbox, KeptBbox, Poi } from '../api';
+import type { Bbox, KeptBbox, Poi, PoiFocusResult } from '../api';
 
 export function makeBbox(overrides: Partial<Bbox> = {}): Bbox {
     return {
@@ -48,6 +48,53 @@ export function makePoi(overrides: Partial<Poi> = {}): Poi {
         center: [-73.55, 45.55],
         tags: { shop: 'bakery', name: 'Pain' },
         group: 'shops',
+        ...overrides,
+    };
+}
+
+/**
+ * Sample POI focus result with one square building polygon and one
+ * entrance node, both anchored on the default `makePoi` center. The
+ * polygon ring is closed (first vertex repeated as last), matching
+ * the contract enforced by `backend/src/poi_focus.rs`.
+ *
+ * @param overrides - Fields to override on the base fixture.
+ */
+export function makePoiFocus(overrides: Partial<PoiFocusResult> = {}): PoiFocusResult {
+    return {
+        center: [-73.55, 45.55],
+        radius_m: 150,
+        buildings: {
+            type: 'FeatureCollection',
+            features: [
+                {
+                    type: 'Feature',
+                    id: 'way/1',
+                    geometry: {
+                        type: 'Polygon',
+                        coordinates: [[
+                            [-73.5505, 45.5495],
+                            [-73.5495, 45.5495],
+                            [-73.5495, 45.5505],
+                            [-73.5505, 45.5505],
+                            [-73.5505, 45.5495],
+                        ]],
+                    },
+                    properties: { building: 'yes' },
+                },
+            ],
+        },
+        entrances: {
+            type: 'FeatureCollection',
+            features: [
+                {
+                    type: 'Feature',
+                    id: 'node/2',
+                    geometry: { type: 'Point', coordinates: [-73.55, 45.55] },
+                    properties: { entrance: 'main' },
+                },
+            ],
+        },
         ...overrides,
     };
 }

@@ -2,12 +2,15 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
     fetchKept,
+    fetchPoiFocuses,
     fetchPoiPicks,
     fetchRandomBbox,
     pickPoi,
+    pickPoiFocus,
     submitDecision,
     type KeptBbox,
     type Poi,
+    type PoiFocusResult,
 } from './api';
 import { makeBbox } from './test/fixtures';
 
@@ -113,5 +116,68 @@ describe('api client', () => {
         const fetchFn = jsonFetch({ picks });
         expect(await fetchPoiPicks(fetchFn)).toEqual(picks);
         expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_picks');
+    });
+
+    const SAMPLE_FOCUS: PoiFocusResult = {
+        center: [-73.5, 45.5],
+        radius_m: 150,
+        buildings: {
+            type: 'FeatureCollection',
+            features: [
+                {
+                    type: 'Feature',
+                    id: 'way/1',
+                    geometry: {
+                        type: 'Polygon',
+                        coordinates: [[
+                            [-73.501, 45.499],
+                            [-73.499, 45.499],
+                            [-73.499, 45.501],
+                            [-73.501, 45.499],
+                        ]],
+                    },
+                    properties: { building: 'yes' },
+                },
+            ],
+        },
+        entrances: {
+            type: 'FeatureCollection',
+            features: [
+                {
+                    type: 'Feature',
+                    id: 'node/2',
+                    geometry: { type: 'Point', coordinates: [-73.5, 45.5] },
+                    properties: { entrance: 'main' },
+                },
+            ],
+        },
+    };
+
+    it('pickPoiFocus POSTs to /poi_focus with the bbox id in the URL', async () => {
+        const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS });
+        const reply = await pickPoiFocus(SAMPLE_BBOX.id, fetchFn);
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchFn.mock.calls[0];
+        expect(url).toBe(`/api/bbox/kept/${SAMPLE_BBOX.id}/poi_focus`);
+        expect(init.method).toBe('POST');
+        expect(reply).toEqual({ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS });
+    });
+
+    it.each([
+        ['409 Conflict (no prior pick)', 409, 'Conflict'],
+        ['422 Unprocessable (empty pick)', 422, 'Unprocessable Entity'],
+        ['502 Bad Gateway (overpass)', 502, 'Bad Gateway'],
+    ] as const)('pickPoiFocus surfaces %s as a thrown Error', async (_label, status, statusText) => {
+        const fetchFn = jsonFetch({ message: 'nope' }, { status, statusText });
+        await expect(pickPoiFocus(SAMPLE_BBOX.id, fetchFn)).rejects.toThrow(
+            new RegExp(`${status} ${statusText}`),
+        );
+    });
+
+    it('fetchPoiFocuses unwraps the { focuses } envelope', async () => {
+        const focuses = [{ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS }];
+        const fetchFn = jsonFetch({ focuses });
+        expect(await fetchPoiFocuses(fetchFn)).toEqual(focuses);
+        expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_focuses');
     });
 });

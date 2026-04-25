@@ -20,6 +20,12 @@ export interface KeptBboxPopupProps {
     /** True while this bbox's pick is in flight. */
     isPicking: boolean;
     onPick: (bboxId: string) => void;
+    /** Optional: opens the POI focus map for this bbox. Forwarded to
+     *  `<PoiPickPanel />` so the focus button only renders once a
+     *  real POI has been picked. */
+    onOpenFocus?: (bboxId: string) => void;
+    /** True while the focus load for this bbox is in flight. */
+    isOpeningFocus?: boolean;
 }
 
 /** Map the (pickedPoi, isPicking) pair to the existing `ProgressStatus`
@@ -35,7 +41,14 @@ function progressFromPick(
     return 'not_started';
 }
 
-export function KeptBboxPopup({ bbox, pickedPoi, isPicking, onPick }: KeptBboxPopupProps) {
+export function KeptBboxPopup({
+    bbox,
+    pickedPoi,
+    isPicking,
+    onPick,
+    onOpenFocus,
+    isOpeningFocus = false,
+}: KeptBboxPopupProps) {
     return (
         <div className="kept-bbox-popup">
             <KeptBboxRow bbox={bbox} status={progressFromPick(pickedPoi, isPicking)} />
@@ -44,6 +57,8 @@ export function KeptBboxPopup({ bbox, pickedPoi, isPicking, onPick }: KeptBboxPo
                 pickedPoi={pickedPoi}
                 isPicking={isPicking}
                 onPick={onPick}
+                onOpenFocus={onOpenFocus}
+                isOpeningFocus={isOpeningFocus}
             />
         </div>
     );

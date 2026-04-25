@@ -1,0 +1,296 @@
+//! Focus map: zoom in on one picked POI and paint its surrounding
+//! buildings + entrances inside the configured buffer ring.
+//!
+//! Pure presentational MapLibre wrapper, mirroring `KeptBboxesMap`'s
+//! lifecycle (create on mount, install sources/layers on every
+//! `style.load`, basemap swaps via `setStyle`). Owns no fetch state of
+//! its own — the parent threads in `focus`, `loading`, `error`, and a
+//! `loadFocus` action so the same `usePoiFocus` instance can power
+//! both this view and the overview map's hydration on load.
+//!
+//! Layers, in render order:
+//!  - building polygons (translucent fill + outline)
+//!  - buffer ring (`radius_m` echoed from the backend, drawn as a
+//!    LineString so the basemap underneath stays readable)
+//!  - entrance markers (small green dots)
+//!  - picked POI marker (orange dot, identical to the overview map
+//!    so the visual lineage from the popup is obvious)
+
+import { useEffect, useRef } from 'react';
+import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+
+import type { KeptBbox, Poi, PoiFocusResult } from '../api';
+import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
+import {
+    toBufferRing,
+    toBuildingsCollection,
+    toEntrancesCollection,
+    toFocusBounds,
+    toPickedPoiCollection,
+} from './poiFocusGeoJson';
+
+export interface PoiFocusMapProps {
+    bbox: KeptBbox;
+    pickedPoi: Poi;
+    /** Server-cached focus payload. `undefined` while still loading
+     *  or after a failure; the parent owns the `loadFocus` trigger. */
+    focus: PoiFocusResult | undefined;
+    /** True while a `loadFocus` request for `bbox.id` is in flight. */
+    loading: boolean;
+    error: string | null;
+    basemapId: BasemapId;
+    /** Return to the overview view; the parent decides what that means. */
+    onBack: () => void;
+    /** Triggered once on mount when no cached focus is available, so
+     *  the parent's hook fires its POST. Kept as a callback (not an
+     *  internal effect) so tests can stub it without touching the
+     *  network. */
+    onLoadFocus: (bboxId: string) => void;
+}
+
+const BUILDINGS_SOURCE = 'focus-buildings';
+const ENTRANCES_SOURCE = 'focus-entrances';
+const PICKED_SOURCE = 'focus-picked';
+const RING_SOURCE = 'focus-ring';
+
+const BUILDINGS_FILL = 'focus-buildings-fill';
+const BUILDINGS_LINE = 'focus-buildings-line';
+const RING_LINE = 'focus-ring-line';
+const ENTRANCES_LAYER = 'focus-entrances';
+const PICKED_LAYER = 'focus-picked';
+
+const FOCUS_LAYER_IDS = [
+    BUILDINGS_FILL,
+    BUILDINGS_LINE,
+    RING_LINE,
+    ENTRANCES_LAYER,
+    PICKED_LAYER,
+];
+const FOCUS_SOURCE_IDS = [BUILDINGS_SOURCE, ENTRANCES_SOURCE, PICKED_SOURCE, RING_SOURCE];
+
+/**
+ * Install the focus sources + layers, replacing any prior installation
+ * so style swaps and data refreshes share the same code path. Caller
+ * must ensure the style is loaded.
+ */
+function installFocusLayers(
+    map: MapLibreMap,
+    pickedPoi: Poi,
+    focus: PoiFocusResult | undefined,
+) {
+    for (const layer of FOCUS_LAYER_IDS) {
+        if (map.getLayer(layer)) map.removeLayer(layer);
+    }
+    for (const source of FOCUS_SOURCE_IDS) {
+        if (map.getSource(source)) map.removeSource(source);
+    }
+
+    const empty = { type: 'FeatureCollection' as const, features: [] };
+    const buildings = focus ? toBuildingsCollection(focus) : empty;
+    const entrances = focus ? toEntrancesCollection(focus) : empty;
+    const ringFeature = focus
+        ? toBufferRing(focus.center, focus.radius_m)
+        : toBufferRing(pickedPoi.center, 0);
+    const ring = { type: 'FeatureCollection' as const, features: [ringFeature] };
+
+    map.addSource(BUILDINGS_SOURCE, { type: 'geojson', data: buildings });
+    map.addSource(ENTRANCES_SOURCE, { type: 'geojson', data: entrances });
+    map.addSource(RING_SOURCE, { type: 'geojson', data: ring });
+    map.addSource(PICKED_SOURCE, { type: 'geojson', data: toPickedPoiCollection(pickedPoi) });
+
+    map.addLayer({
+        id: BUILDINGS_FILL,
+        type: 'fill',
+        source: BUILDINGS_SOURCE,
+        paint: { 'fill-color': '#1d4ed8', 'fill-opacity': 0.25 },
+    });
+    map.addLayer({
+        id: BUILDINGS_LINE,
+        type: 'line',
+        source: BUILDINGS_SOURCE,
+        paint: { 'line-color': '#1d4ed8', 'line-width': 1 },
+    });
+    map.addLayer({
+        id: RING_LINE,
+        type: 'line',
+        source: RING_SOURCE,
+        paint: {
+            'line-color': '#f97316',
+            'line-width': 1.5,
+            'line-dasharray': [2, 2],
+        },
+    });
+    map.addLayer({
+        id: ENTRANCES_LAYER,
+        type: 'circle',
+        source: ENTRANCES_SOURCE,
+        paint: {
+            'circle-radius': 5,
+            'circle-color': '#16a34a',
+            'circle-opacity': 0.9,
+            'circle-stroke-color': '#fff',
+            'circle-stroke-width': 1.25,
+        },
+    });
+    map.addLayer({
+        id: PICKED_LAYER,
+        type: 'circle',
+        source: PICKED_SOURCE,
+        paint: {
+            'circle-radius': 7,
+            'circle-color': '#f97316',
+            'circle-opacity': 1,
+            'circle-stroke-color': '#fff',
+            'circle-stroke-width': 2,
+        },
+    });
+}
+
+export function PoiFocusMap({
+    bbox,
+    pickedPoi,
+    focus,
+    loading,
+    error,
+    basemapId,
+    onBack,
+    onLoadFocus,
+}: PoiFocusMapProps) {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const mapRef = useRef<MapLibreMap | null>(null);
+    const focusRef = useRef(focus);
+    const pickedRef = useRef(pickedPoi);
+    useEffect(() => {
+        focusRef.current = focus;
+    });
+    useEffect(() => {
+        pickedRef.current = pickedPoi;
+    });
+
+    // Trigger one fetch on mount when the cache is cold. We don't
+    // re-trigger on `bbox.id` change because the parent re-mounts this
+    // component when switching to a different bbox (key on view).
+    const triggeredRef = useRef(false);
+    useEffect(() => {
+        if (triggeredRef.current) return;
+        if (focus !== undefined) return;
+        triggeredRef.current = true;
+        onLoadFocus(bbox.id);
+    }, [bbox.id, focus, onLoadFocus]);
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const initial = findBasemap(basemapId) ?? findBasemap(DEFAULT_BASEMAP_ID)!;
+        // Frame the buffer ring on first load even before Overpass
+        // returns: the parent is allowed to mount us with no cached
+        // focus, and we still want a useful zoom level.
+        const radiusM = focusRef.current?.radius_m ?? 200;
+        const center = focusRef.current?.center ?? pickedRef.current.center;
+        const map = new maplibregl.Map({
+            container: containerRef.current,
+            style: initial.style,
+            center,
+            zoom: 17,
+        });
+        map.fitBounds(toFocusBounds(center, radiusM), {
+            padding: 32,
+            duration: 0,
+            maxZoom: 19,
+        });
+        mapRef.current = map;
+
+        map.on('style.load', () => {
+            installFocusLayers(map, pickedRef.current, focusRef.current);
+        });
+        map.on('error', (e) => console.error('[MapLibre]', e.error ?? e));
+
+        return () => {
+            map.remove();
+            mapRef.current = null;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Basemap swap path mirrors KeptBboxesMap exactly.
+    const lastBasemapRef = useRef<BasemapId>(basemapId);
+    useEffect(() => {
+        if (lastBasemapRef.current === basemapId) return;
+        lastBasemapRef.current = basemapId;
+        const map = mapRef.current;
+        if (!map) return;
+        const basemap = findBasemap(basemapId);
+        if (basemap) map.setStyle(basemap.style);
+    }, [basemapId]);
+
+    // Re-install layers + re-fit bounds whenever the focus payload
+    // changes. The fit bounds is recomputed each time so radius
+    // tweaks (e.g., POI_FOCUS_RADIUS_M restart) reframe the view.
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
+        const apply = () => {
+            installFocusLayers(map, pickedPoi, focus);
+            if (focus) {
+                map.fitBounds(toFocusBounds(focus.center, focus.radius_m), {
+                    padding: 32,
+                    duration: 250,
+                    maxZoom: 19,
+                });
+            }
+        };
+        if (map.isStyleLoaded()) {
+            apply();
+            return;
+        }
+        map.once('idle', apply);
+        return () => {
+            map.off('idle', apply);
+        };
+    }, [focus, pickedPoi]);
+
+    return (
+        <div className="poi-focus-map">
+            <header className="poi-focus-map__header">
+                <button
+                    type="button"
+                    className="poi-focus-map__back"
+                    onClick={onBack}
+                >
+                    ← Back
+                </button>
+                <div className="poi-focus-map__title">
+                    <strong>Focus:</strong>{' '}
+                    {pickedPoi.tags['name'] ??
+                        `${pickedPoi.osm_type} ${pickedPoi.osm_id}`}{' '}
+                    <span className="poi-focus-map__group">({pickedPoi.group})</span>
+                </div>
+                {focus && (
+                    <div className="poi-focus-map__counts" aria-label="Feature counts">
+                        <span>{focus.buildings.features.length} buildings</span>
+                        <span>{focus.entrances.features.length} entrances</span>
+                        <span>r = {focus.radius_m} m</span>
+                    </div>
+                )}
+            </header>
+
+            <div
+                ref={containerRef}
+                className="poi-focus-map__canvas"
+                data-testid="poi-focus-map"
+            />
+
+            {loading && <p className="poi-focus-map__status">Loading buildings &amp; entrances…</p>}
+            {error && (
+                <p className="poi-focus-map__error" role="alert">
+                    {error}
+                </p>
+            )}
+            {!loading && !error && focus && focus.buildings.features.length === 0 && focus.entrances.features.length === 0 && (
+                <p className="poi-focus-map__status">
+                    Overpass returned no buildings or entrances inside the buffer.
+                </p>
+            )}
+        </div>
+    );
+}
