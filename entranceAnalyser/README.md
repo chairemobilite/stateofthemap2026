@@ -27,10 +27,14 @@ config/    Runtime config consumed by the analysis pipeline
            poi_tags.yml                            POI tag groups + exceptions
 frontend/  React + Vite + MapLibre GL — three screens:
            src/                                    Sampling screen (keep/reject + strategy)
+           src/useAppConfig.ts                     Hook fetching runtime config (OSM editor URL, focus radius)
            src/keptBboxes/                         Kept-bboxes overview map + popup + POI picker
            src/keptBboxes/PoiFocusMap.tsx          Focus map (buildings + entrances around picked POI)
            src/keptBboxes/usePoiFocus.ts           Hook owning the focus state (bulk hydrate + POST)
            src/keptBboxes/poiFocusGeoJson.ts       Pure helpers: buffer ring + collection casts
+           src/keptBboxes/MapContextMenu.tsx       Right-click "open in …" menu (presentational)
+           src/keptBboxes/mapLinks.ts              URL builders for 7 map services + OSM editor template
+           src/keptBboxes/chinaCoords.ts           WGS84 → GCJ-02 → BD09 datum conversion (China)
 ```
 
 The HTTP backend serves these endpoints:
@@ -44,6 +48,7 @@ The HTTP backend serves these endpoints:
 | GET    | `/api/analyses/poi_picks`                   | list every cached POI pick, in insertion order                   |
 | POST   | `/api/bbox/kept/:id/poi_focus`              | fetch (and cache) buildings + entrances around the picked POI    |
 | GET    | `/api/analyses/poi_focuses`                 | list every cached focus result, in insertion order               |
+| GET    | `/api/config`                               | runtime config echoed to the frontend (OSM editor URL, …)        |
 
 ### Sampling strategies
 
@@ -297,6 +302,60 @@ Overpass `around:` filter needs a centre coordinate. Switching between
 focus maps re-mounts [`PoiFocusMap`](frontend/src/keptBboxes/PoiFocusMap.tsx)
 on `bbox.id` so the new buffer ring frames cleanly instead of
 pan-animating across the world.
+
+## Map context menu
+
+Right-clicking anywhere on the focus map opens a menu of "open in …"
+deeplinks for the click coordinates:
+
+| Service             | Coverage notes                                                                       |
+|---------------------|--------------------------------------------------------------------------------------|
+| Mapillary           | global, OSM-friendly                                                                 |
+| Panoramax           | France-centric; very thin elsewhere                                                  |
+| KartaView           | global, sparse                                                                       |
+| Google Street View  | most of the world; **blocked / no coverage in mainland China**                       |
+| Baidu (百度地图)    | dominant inside mainland China; near-zero abroad                                     |
+| AMap (高德地图)     | strong in mainland China; no coverage abroad                                         |
+| Edit on OpenStreetMap | always — opens iD by default; configurable to JOSM / Rapid / etc. via env var      |
+
+The menu is rendered by
+[`MapContextMenu`](frontend/src/keptBboxes/MapContextMenu.tsx) and
+populated by pure URL builders in
+[`mapLinks.ts`](frontend/src/keptBboxes/mapLinks.ts). Every entry is
+shown unconditionally — the user knows their cell better than we do —
+but two things deserve flagging because they're easy to get wrong:
+
+**1. China datum offset.** Chinese law requires consumer maps to
+publish on **GCJ-02** ("Mars datum"), a non-linear ~50–700 m offset
+of WGS84 that's applied by AMap, Tencent, Apple Maps in China, and
+every 天地图-derived basemap. Baidu adds a second obfuscation
+(**BD09**) on top. OSM stores everything in WGS84, so linking a raw
+WGS84 lat/lon into Baidu or AMap silently lands the marker on the
+wrong block. We convert client-side in
+[`chinaCoords.ts`](frontend/src/keptBboxes/chinaCoords.ts) using the
+canonical `coordtransform` algorithms (parametric tests cross-checked
+against the `wandergis/coordtransform` Python reference and its
+README example). Reverse conversions are not provided: GCJ-02 is
+one-way by design and we don't need them for the menu.
+
+**2. OSM editor URL is configurable.** The "Edit on OpenStreetMap"
+entry uses a template string read from `OSM_EDITOR_URL` (env var,
+default `https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}`)
+with `{lat}`, `{lon}`, and `{zoom}` placeholders substituted at
+click time. Override the env var to swap iD for JOSM remote
+control, RapiD, ID-mapcomplete, etc.:
+
+```env
+# JOSM remote control (edit a 50 m × 50 m box around the click)
+OSM_EDITOR_URL=http://127.0.0.1:8111/load_and_zoom?left={lon}&right={lon}&top={lat}&bottom={lat}
+```
+
+The value is exposed to the frontend via `GET /api/config` rather
+than a `VITE_*` build-time env var so changes take effect on
+backend restart without rebuilding the frontend bundle. The
+[`useAppConfig`](frontend/src/useAppConfig.ts) hook fetches it once
+on mount; the `App` component falls back to the default template
+while the request is in flight.
 
 ## Tests
 
