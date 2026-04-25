@@ -331,12 +331,18 @@ export function PoiFocusMap({
                 )}
             </header>
 
-            <div className="poi-focus-map__canvas">
-                <div
-                    ref={containerRef}
-                    className="poi-focus-map__canvas-inner"
-                    data-testid="poi-focus-map"
-                />
+            <div
+                ref={containerRef}
+                className="poi-focus-map__canvas"
+                data-testid="poi-focus-map"
+            >
+                {/* The menu lives inside MapLibre's container so its
+                 *  `position: absolute` resolves against the canvas
+                 *  itself — `e.point` is canvas-local and matches
+                 *  one-to-one. React happily reconciles its single
+                 *  optional child alongside MapLibre's <canvas>; this
+                 *  is the same pattern react-map-gl uses for markers
+                 *  and popups. */}
                 <MapContextMenu
                     position={menuState?.position ?? null}
                     items={menuItems}

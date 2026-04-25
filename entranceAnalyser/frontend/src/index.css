@@ -481,14 +481,6 @@ body {
     position: relative;
 }
 
-/* Inner div is the actual MapLibre container; the wrapper exists to
- * host React-managed overlays (e.g. <MapContextMenu>) as siblings
- * without colliding with MapLibre's DOM ownership. */
-.poi-focus-map__canvas-inner {
-    position: absolute;
-    inset: 0;
-}
-
 .map-context-menu {
     position: absolute;
     z-index: 5;
