@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use entrance_analyser_backend::{
-    api,
+    api::{self, AppConfig},
     config::{self, DbKind},
     db,
     overpass::OverpassClient,
@@ -39,6 +39,15 @@ const DEFAULT_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 /// the POI plus a few neighbours, narrow enough to keep the
 /// MapLibre source small.
 const DEFAULT_POI_FOCUS_RADIUS_M: u32 = 150;
+
+/// URL template used to open the OSM editor at a clicked map
+/// location when `OSM_EDITOR_URL` is unset. Defaults to the iD
+/// editor on osm.org with the standard `#map=zoom/lat/lon` hash that
+/// every osm.org permalink uses. Operators running a self-hosted iD
+/// fork (or RapiD, JOSM remote control, etc.) should override this
+/// with the appropriate template — `{lat}` / `{lon}` / `{zoom}`
+/// placeholders are substituted client-side at click time.
+const DEFAULT_OSM_EDITOR_URL: &str = "https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -84,18 +93,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Overpass endpoint: {overpass_url}");
     let overpass = OverpassClient::new(overpass_url);
 
-    let focus_radius_m = std::env::var("POI_FOCUS_RADIUS_M")
+    let poi_focus_radius_m = std::env::var("POI_FOCUS_RADIUS_M")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(DEFAULT_POI_FOCUS_RADIUS_M);
-    println!("POI focus radius: {focus_radius_m} m");
+    println!("POI focus radius: {poi_focus_radius_m} m");
 
+    let osm_editor_url =
+        std::env::var("OSM_EDITOR_URL").unwrap_or_else(|_| DEFAULT_OSM_EDITOR_URL.to_string());
+    println!("OSM editor URL template: {osm_editor_url}");
+
+    let app_config = AppConfig {
+        osm_editor_url,
+        poi_focus_radius_m,
+    };
     let state = api::AppState::new(
         PgStore::new(pool),
         sampler,
         poi_config,
         overpass,
-        focus_radius_m,
+        app_config,
     );
     let app = api::router(state).layer(CorsLayer::permissive());
 

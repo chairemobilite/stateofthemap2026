@@ -17,7 +17,7 @@ mod common;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use entrance_analyser_backend::{
-    api::{self, AppState},
+    api::{self, AppConfig, AppState},
     bbox::Bbox,
     overpass::OverpassClient,
     poi_config::PoiTagConfig,
@@ -50,7 +50,10 @@ async fn build_router(pool: sqlx::PgPool, overpass_url: String) -> axum::Router 
         sampler,
         PoiTagConfig::from_yaml_str(POI_TAGS_YAML).unwrap(),
         OverpassClient::new(overpass_url),
-        TEST_FOCUS_RADIUS_M,
+        AppConfig {
+            osm_editor_url: "https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}".into(),
+            poi_focus_radius_m: TEST_FOCUS_RADIUS_M,
+        },
     );
     api::router(state)
 }

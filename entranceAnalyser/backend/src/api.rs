@@ -1,6 +1,7 @@
 //! HTTP handlers for `/api/*`.
 //!
 //! Endpoints:
+//! - `GET  /api/config`                      → public-facing runtime config (URL templates, radii)
 //! - `GET  /api/bbox/random`                 → emit a fresh candidate bbox
 //! - `POST /api/bbox/decision`               → keep or reject a previously emitted bbox
 //! - `GET  /api/bbox/kept`                   → list every kept bbox
@@ -32,9 +33,32 @@ use crate::poi_focus::{fetch_focus, PoiFocusResult};
 use crate::sampler::{SampleError, Sampler, Strategy};
 use crate::storage::PgStore;
 
+/// Public-facing runtime config exposed to the frontend via
+/// `GET /api/config`. Everything in here is safe to ship to clients —
+/// no secrets, no DB URLs, just URL templates and tuning knobs the UI
+/// needs in order to render correctly.
+///
+/// The struct doubles as the wire shape for the endpoint, so adding a
+/// field here automatically extends the JSON response. `serde`'s
+/// `rename_all = "snake_case"` keeps the wire keys consistent with the
+/// rest of the API even though Rust field names already are.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AppConfig {
+    /// URL template the frontend uses to open the OSM editor at a
+    /// clicked map location. Supports `{lat}` / `{lon}` / `{zoom}`
+    /// placeholders, mirroring the `{z}/{x}/{y}` raster-tile
+    /// convention already used in `frontend/src/basemaps.ts`.
+    pub osm_editor_url: String,
+    /// `around:` buffer (m) used by the `/poi_focus` endpoint. Echoed
+    /// here so the UI can show the active default before the first
+    /// focus map is fetched.
+    pub poi_focus_radius_m: u32,
+}
+
 /// Shared state: the sampler (optional when no grid has been built
 /// yet), the kept-bboxes Postgres store, the parsed POI tag config,
-/// the Overpass HTTP client, and the focus-map buffer radius.
+/// the Overpass HTTP client, and the public runtime config.
 ///
 /// `poi_config` is wrapped in `Arc` so per-request `State` clones stay
 /// cheap; `PgStore` and `OverpassClient` already hold internal `Arc`s
@@ -45,11 +69,7 @@ pub struct AppState {
     store: PgStore,
     poi_config: Arc<PoiTagConfig>,
     overpass: OverpassClient,
-    /// `around:` buffer (m) used by the `/poi_focus` endpoint. Read
-    /// from `POI_FOCUS_RADIUS_M` at startup; constant after that so
-    /// every cached row in `analyses.payload.radius_m` reflects the
-    /// active server config.
-    focus_radius_m: u32,
+    config: AppConfig,
 }
 
 impl AppState {
@@ -58,14 +78,14 @@ impl AppState {
         sampler: Option<Sampler>,
         poi_config: PoiTagConfig,
         overpass: OverpassClient,
-        focus_radius_m: u32,
+        config: AppConfig,
     ) -> Self {
         Self {
             sampler,
             store,
             poi_config: Arc::new(poi_config),
             overpass,
-            focus_radius_m,
+            config,
         }
     }
 }
@@ -73,6 +93,7 @@ impl AppState {
 /// Mount every public `/api/*` route on a fresh router.
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/api/config", get(config_handler))
         .route("/api/bbox/random", get(random_handler))
         .route("/api/bbox/decision", post(decision_handler))
         .route("/api/bbox/kept", get(kept_handler))
@@ -81,6 +102,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bbox/kept/:id/poi_focus", post(poi_focus_handler))
         .route("/api/analyses/poi_focuses", get(poi_focuses_handler))
         .with_state(state)
+}
+
+/// `GET /api/config` — publish the public-facing runtime config.
+/// Cheap clone (the config is plain `String` + `u32`); called once
+/// per page load by the frontend.
+async fn config_handler(State(state): State<AppState>) -> Json<AppConfig> {
+    Json(state.config.clone())
 }
 
 /// `?strategy=uniform|population|built|blended` and optional
@@ -308,9 +336,13 @@ async fn poi_focus_handler(
         StatusCode::UNPROCESSABLE_ENTITY,
         format!("bbox {bbox_id} was picked but contained no POI — nothing to focus on"),
     ))?;
-    let result = fetch_focus(&state.overpass, pick.center, state.focus_radius_m)
-        .await
-        .map_err(overpass_error)?;
+    let result = fetch_focus(
+        &state.overpass,
+        pick.center,
+        state.config.poi_focus_radius_m,
+    )
+    .await
+    .map_err(overpass_error)?;
     state
         .store
         .write_poi_focus(bbox_id, &result)

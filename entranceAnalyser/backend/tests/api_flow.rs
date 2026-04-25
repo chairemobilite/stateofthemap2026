@@ -13,7 +13,7 @@ mod common;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use entrance_analyser_backend::{
-    api::{self, AppState},
+    api::{self, AppConfig, AppState},
     bbox::{Bbox, KeptBbox},
     overpass::OverpassClient,
     poi_config::PoiTagConfig,
@@ -67,6 +67,17 @@ async fn seed_single_cell(pool: &sqlx::PgPool, with_built: bool) {
     .unwrap();
 }
 
+/// Stub config for tests that don't exercise `/api/config` directly:
+/// the OSM editor template is the prod default and the radius mirrors
+/// the production knob, so the only thing varying across suites is
+/// what each test cares about.
+fn stub_app_config() -> AppConfig {
+    AppConfig {
+        osm_editor_url: "https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}".into(),
+        poi_focus_radius_m: 150,
+    }
+}
+
 async fn build_router(pool: sqlx::PgPool) -> axum::Router {
     let sampler = Sampler::from_latest(pool.clone()).await.unwrap();
     assert!(sampler.is_some(), "seed must populate grid_meta");
@@ -75,8 +86,7 @@ async fn build_router(pool: sqlx::PgPool) -> axum::Router {
         sampler,
         stub_poi_config(),
         OverpassClient::new(UNREACHABLE_OVERPASS_URL),
-        // Focus radius is unused by this suite; pick the prod default.
-        150,
+        stub_app_config(),
     );
     api::router(state)
 }
@@ -303,6 +313,45 @@ async fn blended_survives_tiny_normalised_weights() {
 }
 
 #[tokio::test]
+async fn config_endpoint_echoes_runtime_overrides() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    // No grid seed needed: /api/config doesn't touch the sampler.
+    let sampler = Sampler::from_latest(db.pool.clone()).await.unwrap();
+    let state = AppState::new(
+        PgStore::new(db.pool.clone()),
+        sampler,
+        stub_poi_config(),
+        OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+        AppConfig {
+            osm_editor_url: "https://example.org/edit?lat={lat}&lon={lon}&z={zoom}".into(),
+            poi_focus_radius_m: 250,
+        },
+    );
+    let app = api::router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = json_body(resp).await;
+    assert_eq!(
+        body["osm_editor_url"],
+        "https://example.org/edit?lat={lat}&lon={lon}&z={zoom}"
+    );
+    assert_eq!(body["poi_focus_radius_m"], 250);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
 async fn random_without_grid_returns_503() {
     let Some(db) = common::pg_or_skip().await else {
         return;
@@ -315,7 +364,7 @@ async fn random_without_grid_returns_503() {
         sampler,
         stub_poi_config(),
         OverpassClient::new(UNREACHABLE_OVERPASS_URL),
-        150,
+        stub_app_config(),
     );
     let app = api::router(state);
 
