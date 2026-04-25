@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { wgs84ToBd09, wgs84ToGcj02 } from './chinaCoords';
 import {
+    amapUrl,
+    baiduPanoramaUrl,
     googleStreetViewUrl,
     kartaViewUrl,
     mapillaryUrl,
@@ -74,5 +77,49 @@ describe('mapLinks', () => {
                 'https://example.org/45.5017,-73.5673/17#{not_a_placeholder}',
             );
         });
+    });
+
+    describe('Chinese services (datum conversion)', () => {
+        // Tian'anmen Square, WGS84.
+        const TIANANMEN: MapPoint = { lat: 39.9093, lon: 116.3974, zoom: 17 };
+
+        it('baiduPanoramaUrl converts WGS84 → BD09 in the location parameter', () => {
+            const [bdLat, bdLon] = wgs84ToBd09(TIANANMEN.lat, TIANANMEN.lon);
+            const url = baiduPanoramaUrl(TIANANMEN);
+            const params = new URL(url).searchParams;
+            expect(url.startsWith('https://api.map.baidu.com/marker?')).toBe(true);
+            expect(params.get('location')).toBe(`${bdLat},${bdLon}`);
+            expect(params.get('coord_type')).toBe('bd09ll');
+            expect(params.get('output')).toBe('html');
+        });
+
+        it('amapUrl converts WGS84 → GCJ-02 in the position parameter', () => {
+            const [gcjLat, gcjLon] = wgs84ToGcj02(TIANANMEN.lat, TIANANMEN.lon);
+            const url = amapUrl(TIANANMEN);
+            const params = new URL(url).searchParams;
+            expect(url.startsWith('https://uri.amap.com/marker?')).toBe(true);
+            // AMap uses lng,lat order — sanity-check the swap.
+            expect(params.get('position')).toBe(`${gcjLon},${gcjLat}`);
+            expect(params.get('coordinate')).toBe('gaode');
+            expect(params.get('callnative')).toBe('0');
+        });
+
+        it.each([
+            ['Montreal', 45.5017, -73.5673],
+            ['Paris', 48.8566, 2.3522],
+        ] as const)(
+            'falls back to the WGS84 input verbatim outside China (%s)',
+            (_label, lat, lon) => {
+                // Out-of-China inputs hit `wgs84ToGcj02`'s pass-through, so
+                // AMap's position parameter should match the input lon,lat
+                // exactly. Baidu still applies the GCJ-02 → BD09 step
+                // globally, so we only assert the location is non-empty
+                // and present.
+                const point: MapPoint = { lat, lon, zoom: 14 };
+                const amap = new URL(amapUrl(point)).searchParams.get('position');
+                expect(amap).toBe(`${lon},${lat}`);
+                expect(new URL(baiduPanoramaUrl(point)).searchParams.get('location')).toBeTruthy();
+            },
+        );
     });
 });
