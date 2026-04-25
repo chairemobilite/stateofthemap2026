@@ -75,6 +75,8 @@ async fn build_router(pool: sqlx::PgPool) -> axum::Router {
         sampler,
         stub_poi_config(),
         OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+        // Focus radius is unused by this suite; pick the prod default.
+        150,
     );
     api::router(state)
 }
@@ -313,6 +315,7 @@ async fn random_without_grid_returns_503() {
         sampler,
         stub_poi_config(),
         OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+        150,
     );
     let app = api::router(state);
 
