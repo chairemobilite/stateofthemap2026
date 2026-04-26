@@ -1,7 +1,7 @@
 //! Overpass query for the per-POI focus map.
 //!
 //! Given a picked POI and a radius (in metres), query Overpass for
-//! every `building=*` way and every `entrance=*` node within the
+//! every `building=*` way and entrance-related **nodes** within the
 //! buffer, and return them as two pre-formed GeoJSON
 //! `FeatureCollection`s ready to drop into MapLibre `geojson` sources.
 //!
@@ -18,9 +18,10 @@
 //!   even with `building=yes`. Widening the user-set radius does not
 //!   help — only a QL change here will. Tracked alongside the
 //!   per-request radius work in PR11.
-//! * **`entrance=*` nodes only**, not `door=*`. The mapping question is
-//!   "does this building have its entrances mapped?", not "does any
-//!   sub-feature have a door tag". Including `door=*` would inflate the
+//! * **Entrance-related nodes only**, not `door=*`. The Overpass union
+//!   fetches `entrance=*` (including `entrance=yes`) and
+//!   `routing:entrance=*` so routers' entrance nodes appear alongside
+//!   classic `entrance=main` etc. Including `door=*` would inflate the
 //!   coverage signal with interior doors and obscure what we want to
 //!   measure.
 //! * **Radius driven by the caller.** The handler resolves the
@@ -34,6 +35,7 @@
 //! The QL builder is public so handler-level tests can assert on its
 //! output without a network round-trip.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +115,7 @@ pub fn build_focus_query(center: [f64; 2], radius_m: u32) -> String {
          (\n\
          \x20   way(around:{r},{lat},{lon})[\"building\"];\n\
          \x20   node(around:{r},{lat},{lon})[\"entrance\"];\n\
+         \x20   node(around:{r},{lat},{lon})[\"routing:entrance\"];\n\
          );\n\
          out geom tags;\n",
         t = OVERPASS_QUERY_TIMEOUT_S,
@@ -138,7 +141,8 @@ pub async fn fetch_focus(
 /// mock HTTP server.
 fn into_focus_result(raw: RawResponse, center: [f64; 2], radius_m: u32) -> PoiFocusResult {
     let mut buildings = Vec::new();
-    let mut entrances = Vec::new();
+    // De-dupe by stable `id` when a node matches both `entrance` and `routing:entrance`.
+    let mut entrances_by_id: BTreeMap<String, Feature> = BTreeMap::new();
     for el in raw.elements {
         let osm_type = match OsmType::from_overpass(&el.osm_type) {
             Some(t) => t,
@@ -152,13 +156,23 @@ fn into_focus_result(raw: RawResponse, center: [f64; 2], radius_m: u32) -> PoiFo
             }
             OsmType::Node => {
                 if let Some(feat) = el.into_point_feature() {
-                    entrances.push(feat);
+                    match entrances_by_id.entry(feat.id.clone()) {
+                        Entry::Vacant(slot) => {
+                            slot.insert(feat);
+                        }
+                        Entry::Occupied(mut occ) => {
+                            for (k, v) in feat.properties {
+                                occ.get_mut().properties.entry(k).or_insert(v);
+                            }
+                        }
+                    }
                 }
             }
             // Relations aren't queried (see module docs); ignore.
             OsmType::Relation => {}
         }
     }
+    let entrances: Vec<Feature> = entrances_by_id.into_values().collect();
     PoiFocusResult {
         center,
         radius_m,
@@ -264,6 +278,10 @@ mod tests {
         assert!(
             ql.contains("node(around:150,45.55,-73.55)[\"entrance\"]"),
             "missing entrance line: {ql}",
+        );
+        assert!(
+            ql.contains("node(around:150,45.55,-73.55)[\"routing:entrance\"]"),
+            "missing routing:entrance line: {ql}",
         );
         assert!(ql.contains("out geom tags;"), "missing out clause: {ql}");
     }
@@ -384,6 +402,35 @@ mod tests {
         }
         assert_eq!(feat.properties.get("entrance"), Some(&"main".to_string()));
         assert_eq!(feat.properties.get("wheelchair"), Some(&"yes".to_string()),);
+    }
+
+    #[test]
+    fn duplicate_node_from_overpass_union_merges_tags() {
+        let raw = RawResponse {
+            elements: vec![
+                RawElement {
+                    osm_type: "node".into(),
+                    id: 42,
+                    lat: Some(45.0),
+                    lon: Some(-73.0),
+                    geometry: None,
+                    tags: BTreeMap::from([("entrance".into(), "main".into())]),
+                },
+                RawElement {
+                    osm_type: "node".into(),
+                    id: 42,
+                    lat: Some(45.0),
+                    lon: Some(-73.0),
+                    geometry: None,
+                    tags: BTreeMap::from([("routing:entrance".into(), "yes".into())]),
+                },
+            ],
+        };
+        let result = into_focus_result(raw, [-73.0, 45.0], 100);
+        assert_eq!(result.entrances.features.len(), 1);
+        let p = &result.entrances.features[0].properties;
+        assert_eq!(p.get("entrance"), Some(&"main".to_string()));
+        assert_eq!(p.get("routing:entrance"), Some(&"yes".to_string()));
     }
 
     #[test]

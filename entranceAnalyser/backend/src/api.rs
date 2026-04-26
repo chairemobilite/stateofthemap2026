@@ -3,32 +3,45 @@
 //! Endpoints:
 //! - `GET  /api/config`                      → public-facing runtime config (URL templates, radii)
 //! - `GET  /api/bbox/random`                 → emit a fresh candidate bbox
+//! - `POST /api/bbox/custom_centroid`        → bbox centred on lat/lon (stats from nearest grid cell)
+//! - `POST /api/bbox/custom_osm`             → bbox centred on one OSM node/way/relation (`out center`)
 //! - `POST /api/bbox/decision`               → keep or reject a previously emitted bbox
 //! - `GET  /api/bbox/kept`                   → list every kept bbox
+//! - `DELETE /api/bbox/kept/:id`             → remove one kept bbox (cascades analyses + measurements)
 //! - `POST /api/bbox/kept/:id/poi_pick`      → pick (and cache) one POI in a kept cell
+//! - `PATCH /api/bbox/kept/:id/poi_pick`     → set reviewer `completed` on an existing pick
 //! - `GET  /api/analyses/poi_picks`          → every cached POI pick, by bbox id
 //! - `POST /api/bbox/kept/:id/poi_focus`     → fetch (and cache) buildings + entrances around the picked POI
-//!   (optional `?radius_m=N`; defaults to the server-side `POI_FOCUS_RADIUS_M`)
+//!   (optional `?radius_m=N` & `?refresh=true`; radius defaults to `POI_FOCUS_RADIUS_M`; refresh bypasses cache)
 //! - `GET  /api/analyses/poi_focuses`        → every cached focus result, by bbox id
+//! - `GET  /api/bbox/kept/:id/poi_focus_measurements` → list persisted measure polylines
+//! - `POST /api/bbox/kept/:id/poi_focus_measurements` → create one polyline
+//! - `PATCH /api/bbox/kept/:id/poi_focus_measurements/:measure_id` → update geometry + speed
+//! - `DELETE /api/bbox/kept/:id/poi_focus_measurements/:measure_id` → remove one row
 //!
 //! The server is stateless between requests: the client echoes the
 //! full bbox back on decision, which lets us persist it in a single
 //! round-trip and keeps horizontal scaling trivial.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::bbox::{random_bbox, Bbox, KeptBbox};
-use crate::overpass::{OverpassClient, OverpassError, Poi};
+use crate::bbox::{bbox_from_cell, random_bbox, Bbox, CandidateSource, KeptBbox};
+use crate::focus_measurements::{
+    path_length_m_haversine, validate_coordinates, validate_measurement_start_for_write,
+    validate_walking_speed_kmh, PoiFocusMeasurement, PoiFocusMeasurementUpsertBody,
+};
+use crate::overpass::{parse_osm_ref, OverpassClient, OverpassError, OsmType, Poi};
 use crate::poi_config::PoiTagConfig;
 use crate::poi_focus::{fetch_focus, PoiFocusResult};
 use crate::sampler::{SampleError, Sampler, Strategy};
@@ -96,11 +109,25 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/config", get(config_handler))
         .route("/api/bbox/random", get(random_handler))
+        .route("/api/bbox/custom_centroid", post(custom_centroid_handler))
+        .route("/api/bbox/custom_osm", post(custom_osm_handler))
         .route("/api/bbox/decision", post(decision_handler))
         .route("/api/bbox/kept", get(kept_handler))
-        .route("/api/bbox/kept/:id/poi_pick", post(poi_pick_handler))
+        .route("/api/bbox/kept/:id", delete(delete_kept_handler))
+        .route(
+            "/api/bbox/kept/:id/poi_pick",
+            post(poi_pick_handler).patch(patch_poi_pick_handler),
+        )
         .route("/api/analyses/poi_picks", get(poi_picks_handler))
         .route("/api/bbox/kept/:id/poi_focus", post(poi_focus_handler))
+        .route(
+            "/api/bbox/kept/:id/poi_focus_measurements",
+            get(poi_focus_measurements_list_handler).post(poi_focus_measurements_create_handler),
+        )
+        .route(
+            "/api/bbox/kept/:id/poi_focus_measurements/:measure_id",
+            patch(poi_focus_measurements_update_handler).delete(poi_focus_measurements_delete_handler),
+        )
         .route("/api/analyses/poi_focuses", get(poi_focuses_handler))
         .with_state(state)
 }
@@ -176,8 +203,83 @@ fn sample_error(err: SampleError) -> ApiError {
              `entrance-analyser-build-grid --built-volume <path>` to enable it"
                 .into(),
         ),
+        SampleError::EmptyGrid => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no grid cells for the active build; run `entrance-analyser-build-grid` first".into(),
+        ),
         SampleError::Db(e) => internal(e),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CustomCentroidBody {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+async fn custom_centroid_handler(
+    State(state): State<AppState>,
+    Json(body): Json<CustomCentroidBody>,
+) -> Result<Json<Bbox>, ApiError> {
+    if !body.lat.is_finite() || !body.lon.is_finite() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "lat and lon must be finite numbers".into(),
+        ));
+    }
+    if !(-90.0..=90.0).contains(&body.lat) {
+        return Err((StatusCode::BAD_REQUEST, "lat must be in [-90, 90]".into()));
+    }
+    if !(-180.0..=180.0).contains(&body.lon) {
+        return Err((StatusCode::BAD_REQUEST, "lon must be in [-180, 180]".into()));
+    }
+    let sampler = state.sampler.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no GHS-POP grid loaded; run `entrance-analyser-build-grid` first".into(),
+    ))?;
+    let cell = sampler
+        .sampled_cell_at_centroid(body.lon, body.lat)
+        .await
+        .map_err(sample_error)?;
+    Ok(Json(bbox_from_cell(
+        cell,
+        sampler.cell_size_km(),
+        CandidateSource::CustomCentroid,
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CustomOsmBody {
+    /// `node/123`, `way/456`, or `relation/789` (spaces optional).
+    pub osm_ref: String,
+}
+
+async fn custom_osm_handler(
+    State(state): State<AppState>,
+    Json(body): Json<CustomOsmBody>,
+) -> Result<Json<Bbox>, ApiError> {
+    let (osm_type, id) = parse_osm_ref(&body.osm_ref).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let (center, _) = state
+        .overpass
+        .fetch_osm_anchor_center(osm_type, id)
+        .await
+        .map_err(overpass_error)?;
+    let sampler = state.sampler.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no GHS-POP grid loaded; run `entrance-analyser-build-grid` first".into(),
+    ))?;
+    let cell = sampler
+        .sampled_cell_at_centroid(center[0], center[1])
+        .await
+        .map_err(sample_error)?;
+    let mut bbox = bbox_from_cell(
+        cell,
+        sampler.cell_size_km(),
+        CandidateSource::CustomOsm,
+    );
+    bbox.custom_osm_type = Some(osm_type.as_str().to_string());
+    bbox.custom_osm_id = Some(id);
+    Ok(Json(bbox))
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,7 +310,35 @@ async fn decision_handler(
     Json(req): Json<DecisionRequest>,
 ) -> Result<Json<DecisionResponse>, ApiError> {
     let total_kept = match req.decision {
-        Decision::Keep => state.store.append(req.bbox).await.map_err(internal)?,
+        Decision::Keep => {
+            if req.bbox.candidate_source == CandidateSource::CustomOsm
+                && (req.bbox.custom_osm_type.is_none() || req.bbox.custom_osm_id.is_none())
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "custom_osm bbox must include custom_osm_type and custom_osm_id".into(),
+                ));
+            }
+            let total_kept = state.store.append(req.bbox.clone()).await.map_err(internal)?;
+            if matches!(
+                req.bbox.candidate_source,
+                CandidateSource::CustomCentroid | CandidateSource::CustomOsm
+            ) {
+                let poi = match req.bbox.candidate_source {
+                    CandidateSource::CustomCentroid => synthetic_centroid_poi(&req.bbox),
+                    CandidateSource::CustomOsm => {
+                        custom_osm_anchor_poi(&req.bbox).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?
+                    }
+                    CandidateSource::Random => unreachable!(),
+                };
+                state
+                    .store
+                    .write_poi_pick(req.bbox.id, Some(&poi))
+                    .await
+                    .map_err(internal)?;
+            }
+            total_kept
+        }
         Decision::Reject => state.store.count().await.map_err(internal)?,
     };
     Ok(Json(DecisionResponse {
@@ -227,6 +357,24 @@ async fn kept_handler(State(state): State<AppState>) -> Result<Json<KeptResponse
     Ok(Json(KeptResponse { kept }))
 }
 
+async fn delete_kept_handler(
+    State(state): State<AppState>,
+    Path(bbox_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let removed = state
+        .store
+        .remove_kept(bbox_id)
+        .await
+        .map_err(internal)?;
+    if !removed {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("kept bbox {bbox_id} not found"),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// One picked POI for a given bbox. `poi` is `null` when Overpass
 /// returned no matching feature for the cell — distinct from "we
 /// haven't picked yet", which would not appear in `/poi_picks` at all.
@@ -234,6 +382,13 @@ async fn kept_handler(State(state): State<AppState>) -> Result<Json<KeptResponse
 pub struct PoiPickResponse {
     pub bbox_id: Uuid,
     pub poi: Option<Poi>,
+    /// Reviewer flag: POI analysis marked done on the overview map (green dot).
+    pub completed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchPoiPickBody {
+    pub completed: bool,
 }
 
 async fn poi_pick_handler(
@@ -243,10 +398,16 @@ async fn poi_pick_handler(
     // Cache hit: return the previously-picked POI (or the cached
     // "empty cell" verdict). Idempotent by design — repeated clicks of
     // the Pick POI button never re-roll the choice.
-    if let Some(cached) = state.store.read_poi_pick(bbox_id).await.map_err(internal)? {
+    if let Some(cached) = state
+        .store
+        .read_poi_pick_payload(bbox_id)
+        .await
+        .map_err(internal)?
+    {
         return Ok(Json(PoiPickResponse {
             bbox_id,
-            poi: cached,
+            poi: cached.poi,
+            completed: cached.completed,
         }));
     }
     // Fresh pick: load the bbox so we can bound the Overpass query.
@@ -259,14 +420,22 @@ async fn poi_pick_handler(
             StatusCode::NOT_FOUND,
             format!("kept bbox {bbox_id} not found"),
         ))?;
-    let candidates = state
-        .overpass
-        .fetch_pois(&kept.bbox, &state.poi_config)
-        .await
-        .map_err(overpass_error)?;
-    // Uniform draw across every candidate (regardless of group), per
-    // the locked decision for PR8: one POI total per cell.
-    let chosen = candidates.into_iter().choose(&mut rand::rng());
+    let chosen = match kept.bbox.candidate_source {
+        CandidateSource::CustomCentroid => Some(synthetic_centroid_poi(&kept.bbox)),
+        CandidateSource::CustomOsm => Some(
+            custom_osm_anchor_poi(&kept.bbox).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?,
+        ),
+        CandidateSource::Random => {
+            let candidates = state
+                .overpass
+                .fetch_pois(&kept.bbox, &state.poi_config)
+                .await
+                .map_err(overpass_error)?;
+            // Uniform draw across every candidate (regardless of group), per
+            // the locked decision for PR8: one POI total per cell.
+            candidates.into_iter().choose(&mut rand::rng())
+        }
+    };
     state
         .store
         .write_poi_pick(bbox_id, chosen.as_ref())
@@ -275,6 +444,36 @@ async fn poi_pick_handler(
     Ok(Json(PoiPickResponse {
         bbox_id,
         poi: chosen,
+        completed: false,
+    }))
+}
+
+async fn patch_poi_pick_handler(
+    State(state): State<AppState>,
+    Path(bbox_id): Path<Uuid>,
+    Json(body): Json<PatchPoiPickBody>,
+) -> Result<Json<PoiPickResponse>, ApiError> {
+    let Some(payload) = state
+        .store
+        .set_poi_pick_completed(bbox_id, body.completed)
+        .await
+        .map_err(internal)?
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("bbox {bbox_id} has no POI pick row — run POST /poi_pick first"),
+        ));
+    };
+    if body.completed && payload.poi.is_none() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "cannot mark completed when this cell has no picked POI (empty pick)".to_string(),
+        ));
+    }
+    Ok(Json(PoiPickResponse {
+        bbox_id,
+        poi: payload.poi,
+        completed: payload.completed,
     }))
 }
 
@@ -289,7 +488,11 @@ async fn poi_picks_handler(
     let raw = state.store.read_all_poi_picks().await.map_err(internal)?;
     let picks = raw
         .into_iter()
-        .map(|(bbox_id, poi)| PoiPickResponse { bbox_id, poi })
+        .map(|(bbox_id, p)| PoiPickResponse {
+            bbox_id,
+            poi: p.poi,
+            completed: p.completed,
+        })
         .collect();
     Ok(Json(PoiPicksResponse { picks }))
 }
@@ -304,13 +507,16 @@ pub struct PoiFocusResponse {
     pub result: PoiFocusResult,
 }
 
-/// Optional overrides for `POST /poi_focus`. Today only the buffer
-/// radius can be tweaked per-request; an unset value falls back to
-/// the server-side `POI_FOCUS_RADIUS_M` so existing callers keep
-/// working unchanged.
+/// Optional overrides for `POST /poi_focus`. The buffer radius can
+/// be tweaked per-request; an unset value falls back to the
+/// server-side `POI_FOCUS_RADIUS_M`. `refresh=true` skips the
+/// per-bbox row cache so Overpass is queried again at the same radius
+/// (for example after OSM edits).
 #[derive(Debug, Deserialize, Default)]
 pub struct PoiFocusParams {
     pub radius_m: Option<u32>,
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// Hard guard rails on the buffer size. Below 10 m the `around:`
@@ -336,21 +542,24 @@ async fn poi_focus_handler(
     }
 
     // Cache hit ONLY when the cached result was computed at the same
-    // radius as the current request. A different radius means the
-    // buffer changed and the buildings/entrances inside it almost
-    // certainly differ; we re-fetch and overwrite the cache so the
-    // single row per bbox always reflects the latest user choice.
-    if let Some(cached) = state
-        .store
-        .read_poi_focus(bbox_id)
-        .await
-        .map_err(internal)?
-    {
-        if cached.radius_m == effective_radius_m {
-            return Ok(Json(PoiFocusResponse {
-                bbox_id,
-                result: cached,
-            }));
+    // radius as the current request and the client did not ask for a
+    // refresh. A different radius means the buffer changed and the
+    // buildings/entrances inside it almost certainly differ; we
+    // re-fetch and overwrite the cache so the single row per bbox
+    // always reflects the latest user choice.
+    if !params.refresh {
+        if let Some(cached) = state
+            .store
+            .read_poi_focus(bbox_id)
+            .await
+            .map_err(internal)?
+        {
+            if cached.radius_m == effective_radius_m {
+                return Ok(Json(PoiFocusResponse {
+                    bbox_id,
+                    result: cached,
+                }));
+            }
         }
     }
     // Focus map is anchored on the previously-picked POI; require
@@ -395,12 +604,177 @@ async fn poi_focuses_handler(
     Ok(Json(PoiFocusesResponse { focuses }))
 }
 
+#[derive(Debug, Serialize)]
+pub struct PoiFocusMeasurementsResponse {
+    pub measurements: Vec<PoiFocusMeasurement>,
+}
+
+fn measurement_validation_error(msg: &'static str) -> ApiError {
+    (StatusCode::BAD_REQUEST, msg.to_string())
+}
+
+async fn poi_focus_measurements_list_handler(
+    State(state): State<AppState>,
+    Path(bbox_id): Path<Uuid>,
+) -> Result<Json<PoiFocusMeasurementsResponse>, ApiError> {
+    let _kept = state
+        .store
+        .get_kept(bbox_id)
+        .await
+        .map_err(internal)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            format!("kept bbox {bbox_id} not found"),
+        ))?;
+    let measurements = state
+        .store
+        .list_poi_focus_measurements(bbox_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(PoiFocusMeasurementsResponse { measurements }))
+}
+
+async fn poi_focus_measurements_create_handler(
+    State(state): State<AppState>,
+    Path(bbox_id): Path<Uuid>,
+    Json(body): Json<PoiFocusMeasurementUpsertBody>,
+) -> Result<Json<PoiFocusMeasurement>, ApiError> {
+    let _kept = state
+        .store
+        .get_kept(bbox_id)
+        .await
+        .map_err(internal)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            format!("kept bbox {bbox_id} not found"),
+        ))?;
+    validate_coordinates(&body.coordinates).map_err(measurement_validation_error)?;
+    validate_walking_speed_kmh(body.walking_speed_kmh).map_err(measurement_validation_error)?;
+    validate_measurement_start_for_write(body.start_origin, body.start_osm_node_id)
+        .map_err(measurement_validation_error)?;
+    let length_m = path_length_m_haversine(&body.coordinates).expect("validated >= 2 points");
+    let row = state
+        .store
+        .insert_poi_focus_measurement(
+            bbox_id,
+            body.coordinates.as_slice(),
+            body.walking_speed_kmh,
+            length_m,
+            body.measurement_type,
+            body.entrance_type,
+            body.start_origin.into(),
+            body.start_osm_node_id,
+        )
+        .await
+        .map_err(internal)?;
+    Ok(Json(row))
+}
+
+async fn poi_focus_measurements_update_handler(
+    State(state): State<AppState>,
+    Path((bbox_id, measure_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<PoiFocusMeasurementUpsertBody>,
+) -> Result<Json<PoiFocusMeasurement>, ApiError> {
+    let _kept = state
+        .store
+        .get_kept(bbox_id)
+        .await
+        .map_err(internal)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            format!("kept bbox {bbox_id} not found"),
+        ))?;
+    validate_coordinates(&body.coordinates).map_err(measurement_validation_error)?;
+    validate_walking_speed_kmh(body.walking_speed_kmh).map_err(measurement_validation_error)?;
+    validate_measurement_start_for_write(body.start_origin, body.start_osm_node_id)
+        .map_err(measurement_validation_error)?;
+    let length_m = path_length_m_haversine(&body.coordinates).expect("validated >= 2 points");
+    let row = state
+        .store
+        .update_poi_focus_measurement(
+            bbox_id,
+            measure_id,
+            body.coordinates.as_slice(),
+            body.walking_speed_kmh,
+            length_m,
+            body.measurement_type,
+            body.entrance_type,
+            body.start_origin.into(),
+            body.start_osm_node_id,
+        )
+        .await
+        .map_err(internal)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            format!("measurement {measure_id} not found for bbox {bbox_id}"),
+        ))?;
+    Ok(Json(row))
+}
+
+async fn poi_focus_measurements_delete_handler(
+    State(state): State<AppState>,
+    Path((bbox_id, measure_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let deleted = state
+        .store
+        .delete_poi_focus_measurement(bbox_id, measure_id)
+        .await
+        .map_err(internal)?;
+    if !deleted {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("measurement {measure_id} not found for bbox {bbox_id}"),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Map any Overpass-side failure to HTTP 502. We deliberately do not
 /// forward the upstream status code — a 401/403/429 from Overpass is
 /// not a 401/403/429 from *us* and propagating it would mislead the
 /// caller about which service is unhealthy.
 fn overpass_error(err: OverpassError) -> ApiError {
-    (StatusCode::BAD_GATEWAY, format!("overpass: {err}"))
+    match &err {
+        OverpassError::NoOsmElement => (StatusCode::NOT_FOUND, err.to_string()),
+        OverpassError::InvalidOsmGeometry => (StatusCode::UNPROCESSABLE_ENTITY, err.to_string()),
+        _ => (StatusCode::BAD_GATEWAY, format!("overpass: {err}")),
+    }
+}
+
+/// Deterministic “picked POI” for custom lat/lon cells (`osm_id` 0 — not an OSM object).
+fn synthetic_centroid_poi(bbox: &Bbox) -> Poi {
+    let mut tags = BTreeMap::new();
+    tags.insert(
+        "note".to_string(),
+        "Focus at the coordinates you entered (custom centroid).".to_string(),
+    );
+    Poi {
+        osm_type: OsmType::Node,
+        osm_id: 0,
+        center: bbox.center,
+        tags,
+        group: "custom_centroid".to_string(),
+    }
+}
+
+/// Picked POI for a cell centred on an explicit OSM anchor (same id as the user chose).
+fn custom_osm_anchor_poi(bbox: &Bbox) -> Result<Poi, String> {
+    let ty = bbox
+        .custom_osm_type
+        .as_deref()
+        .ok_or_else(|| "missing custom_osm_type".to_string())?;
+    let id = bbox
+        .custom_osm_id
+        .ok_or_else(|| "missing custom_osm_id".to_string())?;
+    let osm_type = OsmType::from_overpass(ty)
+        .ok_or_else(|| format!("invalid custom_osm_type {ty:?}"))?;
+    Ok(Poi {
+        osm_type,
+        osm_id: id,
+        center: bbox.center,
+        tags: BTreeMap::new(),
+        group: "custom_osm".to_string(),
+    })
 }
 
 fn internal(err: impl std::fmt::Display) -> ApiError {

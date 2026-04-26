@@ -53,3 +53,7 @@ path = "src/bin/build_grid.rs"
 [[bin]]
 name = "entrance-analyser-ensure-db"
 path = "src/bin/ensure_db.rs"
+
+[[bin]]
+name = "entrance-analyser-migrate"
+path = "src/bin/migrate.rs"

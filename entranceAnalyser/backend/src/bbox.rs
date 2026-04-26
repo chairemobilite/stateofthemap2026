@@ -11,12 +11,55 @@
 //! "this is a 0.05× background-inhabited cell" vs. "this is a 0.97×
 //! near-maximum-density urban core".
 
+use std::fmt;
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use geo::{Destination, Haversine, Point};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::sampler::{SampleError, SampledCell, Sampler, Strategy};
+
+/// How this candidate bbox was produced (`kept_bboxes.candidate_source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateSource {
+    #[default]
+    Random,
+    CustomCentroid,
+    /// Bbox centred on Overpass `out center` of one given node/way/relation.
+    CustomOsm,
+}
+
+impl CandidateSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Random => "random",
+            Self::CustomCentroid => "custom_centroid",
+            Self::CustomOsm => "custom_osm",
+        }
+    }
+}
+
+impl fmt::Display for CandidateSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for CandidateSource {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "random" => Ok(Self::Random),
+            "custom_centroid" => Ok(Self::CustomCentroid),
+            "custom_osm" => Ok(Self::CustomOsm),
+            _ => Err(()),
+        }
+    }
+}
 
 /// A candidate bounding box emitted by `/api/bbox/random`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +88,14 @@ pub struct Bbox {
     /// no built-volume data is available.
     #[serde(default)]
     pub max_built_volume_ratio: f64,
+    /// Random grid draw vs custom lat/lon vs explicit OSM anchor; echoed on keep and stored in Postgres.
+    #[serde(default)]
+    pub candidate_source: CandidateSource,
+    /// When [`CandidateSource::CustomOsm`], the `type/id` used to resolve the centre via Overpass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_osm_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_osm_id: Option<i64>,
 }
 
 /// A kept bbox with the acceptance timestamp, as returned by
@@ -68,7 +119,11 @@ fn rectangle_around(lon: f64, lat: f64, cell_size_km: u32) -> (f64, f64, f64, f6
 }
 
 /// Build a `Bbox` from a sampled grid cell. Fresh v4 UUID per call.
-pub fn bbox_from_cell(sampled: SampledCell, cell_size_km: u32) -> Bbox {
+pub fn bbox_from_cell(
+    sampled: SampledCell,
+    cell_size_km: u32,
+    candidate_source: CandidateSource,
+) -> Bbox {
     let (west, south, east, north) = rectangle_around(sampled.lon, sampled.lat, cell_size_km);
     Bbox {
         id: Uuid::new_v4(),
@@ -83,6 +138,9 @@ pub fn bbox_from_cell(sampled: SampledCell, cell_size_km: u32) -> Bbox {
         max_density_ratio: sampled.max_density_ratio,
         built_volume: sampled.built_volume,
         max_built_volume_ratio: sampled.max_built_volume_ratio,
+        candidate_source,
+        custom_osm_type: None,
+        custom_osm_id: None,
     }
 }
 
@@ -90,7 +148,11 @@ pub fn bbox_from_cell(sampled: SampledCell, cell_size_km: u32) -> Bbox {
 /// into a `Bbox`.
 pub async fn random_bbox(sampler: &Sampler, strategy: Strategy) -> Result<Bbox, SampleError> {
     let cell = sampler.sample(strategy).await?;
-    Ok(bbox_from_cell(cell, sampler.cell_size_km()))
+    Ok(bbox_from_cell(
+        cell,
+        sampler.cell_size_km(),
+        CandidateSource::Random,
+    ))
 }
 
 #[cfg(test)]
@@ -109,7 +171,11 @@ mod tests {
     #[case(10, -45.0)]
     #[case(25, 60.0)]
     fn bbox_side_matches_cell_size(#[case] cell_size_km: u32, #[case] lat: f64) {
-        let b = bbox_from_cell(cell_at(lat, 0.0, cell_size_km), cell_size_km);
+        let b = bbox_from_cell(
+            cell_at(lat, 0.0, cell_size_km),
+            cell_size_km,
+            CandidateSource::Random,
+        );
         let width = Haversine.distance(Point::new(b.west, lat), Point::new(b.east, lat));
         let height = Haversine.distance(Point::new(0.0, b.south), Point::new(0.0, b.north));
         let expected = cell_size_km as f64 * 1000.0;
@@ -123,7 +189,7 @@ mod tests {
         // 1000 people in a 10 × 10 km cell ⇒ 10 / km². Max density set
         // to 10 / km² via the helper so ratio = 1.0.
         let cell = Sampler::decorate_for_tests(10, 10.0, 0.0, 0.0, 1000.0);
-        let b = bbox_from_cell(cell, 10);
+        let b = bbox_from_cell(cell, 10, CandidateSource::Random);
         assert_eq!(b.population, 1000.0);
         assert!((b.density_per_km2 - 10.0).abs() < 1e-9);
         assert!((b.max_density_ratio - 1.0).abs() < 1e-9);
@@ -132,7 +198,7 @@ mod tests {
     #[test]
     fn built_volume_is_propagated() {
         let cell = Sampler::decorate_for_tests_full(10, 10.0, 2000.0, 0.0, 0.0, 1000.0, 500.0);
-        let b = bbox_from_cell(cell, 10);
+        let b = bbox_from_cell(cell, 10, CandidateSource::Random);
         assert_eq!(b.built_volume, 500.0);
         assert!((b.max_built_volume_ratio - 0.25).abs() < 1e-9);
     }
@@ -140,8 +206,8 @@ mod tests {
     #[test]
     fn each_call_yields_a_fresh_uuid() {
         let cell = cell_at(0.0, 0.0, 10);
-        let a = bbox_from_cell(cell, 10);
-        let b = bbox_from_cell(cell, 10);
+        let a = bbox_from_cell(cell, 10, CandidateSource::Random);
+        let b = bbox_from_cell(cell, 10, CandidateSource::Random);
         assert_ne!(a.id, b.id);
     }
 }
