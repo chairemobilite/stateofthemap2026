@@ -183,6 +183,7 @@ exceptions:
     - amenity=lounger
     - amenity=mailroom
     - amenity=motorcycle_parking
+    - amenity=parking
     - amenity=parking_entrance
     - amenity=parking_space
     - amenity=payment_terminal
