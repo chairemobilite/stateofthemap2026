@@ -18,9 +18,13 @@
 //!   sub-feature have a door tag". Including `door=*` would inflate the
 //!   coverage signal with interior doors and obscure what we want to
 //!   measure.
-//! * **Radius driven by the caller.** The handler reads
-//!   `POI_FOCUS_RADIUS_M` from config (default 150 m) and passes it
-//!   through, so an operator can widen / shrink without touching code.
+//! * **Radius driven by the caller.** The handler resolves the
+//!   buffer from `?radius_m=` (per-request override) or
+//!   `POI_FOCUS_RADIUS_M` (server default, 150 m) and passes it
+//!   through, so an operator can widen / shrink either globally or
+//!   for a single POI without touching code. The handler also
+//!   short-circuits the cache only when the cached radius matches
+//!   the requested one.
 //!
 //! The QL builder is public so handler-level tests can assert on its
 //! output without a network round-trip.

@@ -8,6 +8,7 @@
 //! - `POST /api/bbox/kept/:id/poi_pick`      → pick (and cache) one POI in a kept cell
 //! - `GET  /api/analyses/poi_picks`          → every cached POI pick, by bbox id
 //! - `POST /api/bbox/kept/:id/poi_focus`     → fetch (and cache) buildings + entrances around the picked POI
+//!   (optional `?radius_m=N`; defaults to the server-side `POI_FOCUS_RADIUS_M`)
 //! - `GET  /api/analyses/poi_focuses`        → every cached focus result, by bbox id
 //!
 //! The server is stateless between requests: the client echoes the
@@ -303,23 +304,54 @@ pub struct PoiFocusResponse {
     pub result: PoiFocusResult,
 }
 
+/// Optional overrides for `POST /poi_focus`. Today only the buffer
+/// radius can be tweaked per-request; an unset value falls back to
+/// the server-side `POI_FOCUS_RADIUS_M` so existing callers keep
+/// working unchanged.
+#[derive(Debug, Deserialize, Default)]
+pub struct PoiFocusParams {
+    pub radius_m: Option<u32>,
+}
+
+/// Hard guard rails on the buffer size. Below 10 m the `around:`
+/// filter loses any usefulness; above 2000 m the Overpass query
+/// budget (25 s) is at risk of timing out in dense urban areas. The
+/// frontend `<input min/max>` mirrors these — keep them in sync.
+pub const POI_FOCUS_RADIUS_MIN_M: u32 = 10;
+pub const POI_FOCUS_RADIUS_MAX_M: u32 = 2000;
+
 async fn poi_focus_handler(
     State(state): State<AppState>,
     Path(bbox_id): Path<Uuid>,
+    Query(params): Query<PoiFocusParams>,
 ) -> Result<Json<PoiFocusResponse>, ApiError> {
-    // Cache hit: the focus result is recorded once per bbox and
-    // re-read on every subsequent click. Idempotent by design,
-    // matching `/poi_pick`.
+    let effective_radius_m = params.radius_m.unwrap_or(state.config.poi_focus_radius_m);
+    if !(POI_FOCUS_RADIUS_MIN_M..=POI_FOCUS_RADIUS_MAX_M).contains(&effective_radius_m) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "radius_m must be in [{POI_FOCUS_RADIUS_MIN_M}, {POI_FOCUS_RADIUS_MAX_M}], got {effective_radius_m}",
+            ),
+        ));
+    }
+
+    // Cache hit ONLY when the cached result was computed at the same
+    // radius as the current request. A different radius means the
+    // buffer changed and the buildings/entrances inside it almost
+    // certainly differ; we re-fetch and overwrite the cache so the
+    // single row per bbox always reflects the latest user choice.
     if let Some(cached) = state
         .store
         .read_poi_focus(bbox_id)
         .await
         .map_err(internal)?
     {
-        return Ok(Json(PoiFocusResponse {
-            bbox_id,
-            result: cached,
-        }));
+        if cached.radius_m == effective_radius_m {
+            return Ok(Json(PoiFocusResponse {
+                bbox_id,
+                result: cached,
+            }));
+        }
     }
     // Focus map is anchored on the previously-picked POI; require
     // that step to have run first, with a non-null pick.
@@ -336,13 +368,9 @@ async fn poi_focus_handler(
         StatusCode::UNPROCESSABLE_ENTITY,
         format!("bbox {bbox_id} was picked but contained no POI — nothing to focus on"),
     ))?;
-    let result = fetch_focus(
-        &state.overpass,
-        pick.center,
-        state.config.poi_focus_radius_m,
-    )
-    .await
-    .map_err(overpass_error)?;
+    let result = fetch_focus(&state.overpass, pick.center, effective_radius_m)
+        .await
+        .map_err(overpass_error)?;
     state
         .store
         .write_poi_focus(bbox_id, &result)

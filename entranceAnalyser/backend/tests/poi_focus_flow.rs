@@ -25,6 +25,7 @@ use entrance_analyser_backend::{
     storage::PgStore,
 };
 use http_body_util::BodyExt;
+use rstest::rstest;
 use serde_json::{json, Value as JsonValue};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -140,13 +141,30 @@ async fn pick_poi(app: &axum::Router, bbox_id: Uuid) -> JsonValue {
     json_body(resp).await
 }
 
+/// Default focus call: no `?radius_m=`, so the handler falls back to
+/// the server's `POI_FOCUS_RADIUS_M` (mirrored as
+/// [`TEST_FOCUS_RADIUS_M`] in this suite).
 async fn focus_poi(app: &axum::Router, bbox_id: Uuid) -> (StatusCode, JsonValue) {
+    focus_poi_with_radius(app, bbox_id, None).await
+}
+
+/// Variant with an optional `?radius_m=` override, used by the
+/// per-request-radius tests.
+async fn focus_poi_with_radius(
+    app: &axum::Router,
+    bbox_id: Uuid,
+    radius_m: Option<u32>,
+) -> (StatusCode, JsonValue) {
+    let mut uri = format!("/api/bbox/kept/{bbox_id}/poi_focus");
+    if let Some(r) = radius_m {
+        uri.push_str(&format!("?radius_m={r}"));
+    }
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(format!("/api/bbox/kept/{bbox_id}/poi_focus"))
+                .uri(uri)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -496,6 +514,110 @@ async fn poi_focuses_endpoint_returns_every_cached_focus() {
     for f in focuses {
         assert_eq!(f["result"]["radius_m"], TEST_FOCUS_RADIUS_M);
     }
+
+    db.cleanup().await.ok();
+}
+
+/// Validates the `[10, 2000]` guard rails on `?radius_m=`. We don't
+/// need a working pick to exercise the validation path because the
+/// range check runs before the cache / pick lookups; an empty mock
+/// is enough.
+#[rstest]
+#[case(Some(9), StatusCode::BAD_REQUEST)] // below floor
+#[case(Some(2001), StatusCode::BAD_REQUEST)] // above ceiling
+#[case(Some(0), StatusCode::BAD_REQUEST)] // common typo
+#[case(Some(10), StatusCode::OK)] // floor inclusive
+#[case(Some(2000), StatusCode::OK)] // ceiling inclusive
+#[case(Some(300), StatusCode::OK)] // typical override
+#[case(None, StatusCode::OK)] // omitted falls back to server default
+#[tokio::test]
+async fn radius_query_param_is_validated(
+    #[case] radius_m: Option<u32>,
+    #[case] expected: StatusCode,
+) {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let overpass = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(overpass_body(json!([shop_pick_element()]))),
+        )
+        .up_to_n_times(1)
+        .mount(&overpass)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(overpass_body(json!([]))))
+        .mount(&overpass)
+        .await;
+
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let bbox_id = keep_one_bbox(&app).await;
+    pick_poi(&app, bbox_id).await;
+
+    let (status, _) = focus_poi_with_radius(&app, bbox_id, radius_m).await;
+    assert_eq!(status, expected, "radius_m={radius_m:?}");
+
+    db.cleanup().await.ok();
+}
+
+/// Switching to a different radius must re-issue the Overpass query
+/// and overwrite the cached row. Coming back to the original radius
+/// also re-issues (overwrite caching, latest-wins). The single-row
+/// guarantee is implied by the shape of the `analyses` table; this
+/// test validates the runtime behaviour observed by the API.
+#[tokio::test]
+async fn changing_radius_re_fetches_overpass_and_overwrites_cache() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let overpass = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(overpass_body(json!([shop_pick_element()]))),
+        )
+        .up_to_n_times(1)
+        .mount(&overpass)
+        .await;
+    // Three focus fetches expected: 200 m (initial), 400 m (override
+    // → re-fetch), 200 m again (different from cached 400 → re-fetch).
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(overpass_body(json!([]))))
+        .expect(3)
+        .mount(&overpass)
+        .await;
+
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let bbox_id = keep_one_bbox(&app).await;
+    pick_poi(&app, bbox_id).await;
+
+    let (s1, b1) = focus_poi_with_radius(&app, bbox_id, Some(200)).await;
+    assert_eq!(s1, StatusCode::OK);
+    assert_eq!(b1["result"]["radius_m"], 200);
+
+    // Same radius → cache hit, no extra Overpass call.
+    let (s1b, b1b) = focus_poi_with_radius(&app, bbox_id, Some(200)).await;
+    assert_eq!(s1b, StatusCode::OK);
+    assert_eq!(b1b["result"]["radius_m"], 200);
+
+    let (s2, b2) = focus_poi_with_radius(&app, bbox_id, Some(400)).await;
+    assert_eq!(s2, StatusCode::OK);
+    assert_eq!(b2["result"]["radius_m"], 400);
+
+    let (s3, b3) = focus_poi_with_radius(&app, bbox_id, Some(200)).await;
+    assert_eq!(s3, StatusCode::OK);
+    assert_eq!(b3["result"]["radius_m"], 200);
 
     db.cleanup().await.ok();
 }
