@@ -7,13 +7,22 @@
 //! that displays them.
 
 /** Lifecycle of an analysis for one kept bbox, from the UI's point of view. */
-export type ProgressStatus = 'not_started' | 'queued' | 'running' | 'done' | 'failed';
+export type ProgressStatus =
+    | 'not_started'
+    | 'queued'
+    | 'running'
+    | 'active'
+    | 'done'
+    | 'completed'
+    | 'failed';
 
 /** Human-readable label shown inside `<StatusPill />` for each status. */
 export const PROGRESS_LABELS: Record<ProgressStatus, string> = {
     not_started: 'Not started',
     queued: 'Queued',
     running: 'Running',
+    active: 'Started',
     done: 'Done',
+    completed: 'Completed',
     failed: 'Failed',
 };

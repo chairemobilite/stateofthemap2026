@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchKept, type KeptBbox } from '../api';
+import { deleteKept, fetchKept, type KeptBbox } from '../api';
 
 /** Fetch lifecycle for the kept-bboxes list; consumed by every component
  *  that renders hook output (the map overlay, the former list view). */
@@ -16,6 +16,8 @@ export type KeptBboxesStatus = 'loading' | 'idle' | 'error';
 export interface UseKeptBboxesOptions {
     /** Override the API module, mostly for tests. */
     fetchAll?: () => Promise<KeptBbox[]>;
+    /** Override DELETE, mostly for tests. */
+    deleteOne?: (bboxId: string) => Promise<void>;
 }
 
 export interface KeptBboxesState {
@@ -23,6 +25,8 @@ export interface KeptBboxesState {
     status: KeptBboxesStatus;
     error: string | null;
     reload: () => Promise<void>;
+    /** Remove one kept bbox on the server and drop it from local state. */
+    removeKept: (bboxId: string) => Promise<void>;
 }
 
 /**
@@ -35,6 +39,10 @@ export function useKeptBboxes(options: UseKeptBboxesOptions = {}): KeptBboxesSta
     const fetchAll = useMemo(
         () => options.fetchAll ?? (() => fetchKept()),
         [options.fetchAll],
+    );
+    const deleteOne = useMemo(
+        () => options.deleteOne ?? ((id: string) => deleteKept(id)),
+        [options.deleteOne],
     );
 
     const [keptBboxes, setKeptBboxes] = useState<KeptBbox[]>([]);
@@ -56,11 +64,25 @@ export function useKeptBboxes(options: UseKeptBboxesOptions = {}): KeptBboxesSta
         }
     }, [fetchAll]);
 
+    const removeKept = useCallback(
+        async (bboxId: string) => {
+            setError(null);
+            try {
+                await deleteOne(bboxId);
+                setKeptBboxes((rows) => rows.filter((b) => b.id !== bboxId));
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+                throw err;
+            }
+        },
+        [deleteOne],
+    );
+
     useEffect(() => {
         if (bootstrapped.current) return;
         bootstrapped.current = true;
         void reload();
     }, [reload]);
 
-    return { keptBboxes, status, error, reload };
+    return { keptBboxes, status, error, reload, removeKept };
 }

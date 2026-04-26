@@ -20,9 +20,15 @@ export interface PoiPickPanelProps {
     /** `undefined` when no pick has been requested yet, `null` when
      *  Overpass returned no match, otherwise the picked POI. */
     pickedPoi: Poi | null | undefined;
+    /** Reviewer flag (green dot on overview map when true). */
+    pickCompleted: boolean;
     /** True while this specific bbox's pick request is in flight. */
     isPicking: boolean;
+    /** True while PATCH `completed` is in flight. */
+    isSavingPickCompleted?: boolean;
     onPick: (bboxId: string) => void;
+    /** Toggle overview "completed" state; only shown when a real POI exists. */
+    onSetPickCompleted?: (bboxId: string, completed: boolean) => void;
     /** Optional handler that opens the POI focus map. The button is
      *  rendered (and enabled) only when a real POI was picked, since
      *  the focus query is anchored on the pick's centre coords.
@@ -60,8 +66,11 @@ function highlightTag(poi: Poi): string | null {
 export function PoiPickPanel({
     bboxId,
     pickedPoi,
+    pickCompleted,
     isPicking,
+    isSavingPickCompleted = false,
     onPick,
+    onSetPickCompleted,
     onOpenFocus,
     isOpeningFocus = false,
 }: PoiPickPanelProps) {
@@ -91,6 +100,8 @@ export function PoiPickPanel({
     }
 
     const tag = highlightTag(pickedPoi);
+    /** Synthetic pick for custom lat/lon cells (`osm_id` 0 is not a real OSM object). */
+    const showOsmPermalink = !(pickedPoi.osm_type === 'node' && pickedPoi.osm_id === 0);
     const osmUrl = `https://www.openstreetmap.org/${pickedPoi.osm_type}/${pickedPoi.osm_id}`;
     return (
         <div className="poi-pick-panel">
@@ -107,12 +118,21 @@ export function PoiPickPanel({
                         </dd>
                     </>
                 )}
-                <dt>OSM</dt>
-                <dd>
-                    <a href={osmUrl} target="_blank" rel="noreferrer noopener">
-                        {pickedPoi.osm_type}/{pickedPoi.osm_id}
-                    </a>
-                </dd>
+                {showOsmPermalink ? (
+                    <>
+                        <dt>OSM</dt>
+                        <dd>
+                            <a href={osmUrl} target="_blank" rel="noreferrer noopener">
+                                {pickedPoi.osm_type}/{pickedPoi.osm_id}
+                            </a>
+                        </dd>
+                    </>
+                ) : (
+                    <>
+                        <dt>OSM</dt>
+                        <dd>— (sampling centroid, not an OSM id)</dd>
+                    </>
+                )}
             </dl>
             {onOpenFocus && (
                 <button
@@ -123,6 +143,17 @@ export function PoiPickPanel({
                 >
                     {isOpeningFocus ? 'Loading…' : 'Open focus map'}
                 </button>
+            )}
+            {onSetPickCompleted && (
+                <label className="poi-pick-panel__completed">
+                    <input
+                        type="checkbox"
+                        checked={pickCompleted}
+                        disabled={isSavingPickCompleted}
+                        onChange={(e) => onSetPickCompleted(bboxId, e.target.checked)}
+                    />{' '}
+                    Mark POI completed (green on overview map)
+                </label>
             )}
         </div>
     );

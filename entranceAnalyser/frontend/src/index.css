@@ -150,6 +150,128 @@ body {
     font-size: 0.85rem;
 }
 
+.sampling-panel__custom {
+    margin: 0 0 0.75rem;
+}
+
+.sampling-panel__custom button {
+    width: 100%;
+    border: 1px dashed #94a3b8;
+    background: #f8fafc;
+    color: #334155;
+    padding: 0.45rem 0.6rem;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.sampling-panel__custom button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.custom-centroid-modal__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(15, 23, 42, 0.45);
+}
+
+.custom-centroid-modal {
+    width: 100%;
+    max-width: 22rem;
+    padding: 1.25rem 1.35rem;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    color: #111;
+}
+
+.custom-centroid-modal__title {
+    margin: 0 0 0.5rem;
+    font-size: 1.05rem;
+}
+
+.custom-centroid-modal__hint {
+    margin: 0 0 1rem;
+    font-size: 0.82rem;
+    color: #475569;
+    line-height: 1.45;
+}
+
+.custom-centroid-modal__microhint {
+    margin: -0.45rem 0 0.35rem;
+    font-size: 0.75rem;
+    color: #64748b;
+    line-height: 1.35;
+}
+
+.custom-centroid-modal__fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    margin-bottom: 0.75rem;
+}
+
+.custom-centroid-modal__label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.82rem;
+    color: #334155;
+}
+
+.custom-centroid-modal__label input {
+    font: inherit;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+}
+
+.custom-centroid-modal__error {
+    margin: 0 0 0.65rem;
+    padding: 0.45rem 0.6rem;
+    background: #fee2e2;
+    color: #991b1b;
+    border-radius: 4px;
+    font-size: 0.82rem;
+}
+
+.custom-centroid-modal__actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.custom-centroid-modal__actions button {
+    font: inherit;
+    padding: 0.4rem 0.85rem;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.custom-centroid-modal__actions button[type='button'] {
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #334155;
+}
+
+.custom-centroid-modal__actions button[type='submit'] {
+    border: 1px solid #1d4ed8;
+    background: #1d4ed8;
+    color: #fff;
+}
+
+.custom-centroid-modal__actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .strategy-selector {
     border: 1px solid #d4d4d8;
     border-radius: 6px;
@@ -292,7 +414,17 @@ body {
     color: #1d4ed8;
 }
 
+.progress-pill[data-status='active'] {
+    background: #ffedd5;
+    color: #c2410c;
+}
+
 .progress-pill[data-status='done'] {
+    background: #e4e4e7;
+    color: #3f3f46;
+}
+
+.progress-pill[data-status='completed'] {
     background: #dcfce7;
     color: #15803d;
 }
@@ -353,6 +485,32 @@ body {
     flex-direction: column;
     gap: 0.65rem;
     min-width: 18rem;
+}
+
+.kept-bbox-popup__actions {
+    border-top: 1px solid #fecaca;
+    padding-top: 0.55rem;
+}
+
+.kept-bbox-popup__reject {
+    width: 100%;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid #dc2626;
+    border-radius: 6px;
+    background: #fff;
+    color: #b91c1c;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.kept-bbox-popup__reject:hover:not(:disabled) {
+    background: #fef2f2;
+}
+
+.kept-bbox-popup__reject:disabled {
+    opacity: 0.55;
+    cursor: progress;
 }
 
 .poi-pick-panel {
@@ -426,6 +584,14 @@ body {
 .poi-pick-panel__focus-button:disabled {
     opacity: 0.6;
     cursor: progress;
+}
+
+.poi-pick-panel__completed {
+    display: block;
+    margin-top: 0.55rem;
+    font-size: 0.8rem;
+    color: #3f3f46;
+    cursor: pointer;
 }
 
 /* Focus map view --------------------------------------------------------- */
@@ -535,6 +701,147 @@ body {
 .poi-focus-map__canvas {
     flex: 1;
     position: relative;
+}
+
+.measure-panel {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    /* Above basemap toggle (z:10) so actions stay clickable on the right edge. */
+    z-index: 12;
+    min-width: 16rem;
+    background: #fff;
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    font-size: 0.85rem;
+    overflow: hidden;
+}
+
+.measure-panel__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    background: #f4f4f5;
+    border-bottom: 1px solid #d4d4d8;
+    font-weight: 600;
+}
+
+.measure-panel__header button {
+    background: none;
+    border: none;
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    color: #71717a;
+}
+
+.measure-panel__header button:hover {
+    color: #ef4444;
+}
+
+.measure-panel__body {
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.measure-panel__body input {
+    width: 4rem;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    font: inherit;
+}
+
+.measure-panel__body select {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin-top: 0.25rem;
+    padding: 0.25rem 0.35rem;
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    font: inherit;
+    background: #fff;
+}
+
+.measure-panel__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.measure-panel__actions button {
+    margin-top: 0;
+}
+
+.measure-panel__error {
+    color: #b91c1c;
+    font-size: 0.8rem;
+    margin: 0;
+}
+
+.measure-panel__body button {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    background: #f97316;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.measure-panel__body button:hover {
+    background: #ea580c;
+}
+
+.poi-focus-map__measure-btn {
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    padding: 0.2rem 0.6rem;
+    font: inherit;
+    cursor: pointer;
+    background: #fff;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.poi-focus-map__measure-btn:hover {
+    background: #f4f4f5;
+}
+
+.poi-focus-map__completed {
+    font-size: 0.8rem;
+    color: #3f3f46;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+
+.poi-focus-map__reject-kept {
+    border: 1px solid #dc2626;
+    border-radius: 4px;
+    padding: 0.2rem 0.55rem;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #b91c1c;
+    background: #fff;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.poi-focus-map__reject-kept:hover:not(:disabled) {
+    background: #fef2f2;
+}
+
+.poi-focus-map__reject-kept:disabled {
+    opacity: 0.55;
+    cursor: progress;
 }
 
 .map-context-menu {

@@ -8,8 +8,7 @@
 //!  - `circle` markers at the cell centers at `zoom < RECT_MIN_ZOOM`
 //!
 //! On top of those, a separate `poi-markers` layer paints picked POIs
-//! (orange dots) at every zoom, so the user can spot which kept cells
-//! already have an analysis cached.
+//! (orange = in progress, green = marked completed) at every zoom.
 //!
 //! Clicking a bbox layer opens a MapLibre popup hosting a React root
 //! that renders `<KeptBboxPopup />` — the bbox row plus the
@@ -27,7 +26,7 @@ import maplibregl, {
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import type { KeptBbox, Poi } from '../api';
+import type { KeptBbox, PoiPickEntry } from '../api';
 import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
 import { KeptBboxPopup } from './KeptBboxPopup';
 import {
@@ -43,19 +42,26 @@ export interface KeptBboxesMapProps {
     basemapId: BasemapId;
     status: KeptBboxesStatus;
     error: string | null;
-    /** Per-bbox picked POI map, keyed by bbox id. `undefined` means
-     *  no pick yet, `null` means Overpass matched nothing. */
-    picks: Record<string, Poi | null>;
+    /** Per-bbox cached POI pick (`poi` + reviewer `completed` flag). */
+    picks: Record<string, PoiPickEntry>;
     /** Bbox ids currently fetching a pick, so the popup can disable
      *  the button without blocking other rows. */
     picking: Set<string>;
+    /** Bbox ids currently PATCHing the completed flag. */
+    savingPickCompleted: Set<string>;
     /** Triggered by the "Pick POI" button inside the popup. */
     onPickPoi: (bboxId: string) => void;
+    /** Toggle reviewer completed (green overview marker). */
+    onSetPickCompleted: (bboxId: string, completed: boolean) => void;
     /** Triggered by the "Open focus map" button inside the popup.
      *  Optional: when omitted, the popup hides the button entirely. */
     onOpenFocus?: (bboxId: string) => void;
     /** Bbox ids currently fetching a focus payload. */
     openingFocus?: Set<string>;
+    /** Remove a kept bbox (`DELETE /kept/:id`); parent should confirm first. */
+    onRemoveFromKept: (bboxId: string) => void;
+    /** Bbox id currently being removed (disables popup button). */
+    removingKeptBboxId: string | null;
 }
 
 const POLY_SOURCE = 'kept-polygons';
@@ -88,7 +94,7 @@ type MapLibreClickEvent = MapMouseEvent & { features?: MapGeoJSONFeature[] };
 function installKeptLayers(
     map: MapLibreMap,
     keptBboxes: KeptBbox[],
-    picks: Record<string, Poi | null>,
+    picks: Record<string, PoiPickEntry>,
 ) {
     for (const layer of [FILL_LAYER, LINE_LAYER, CIRCLE_LAYER, POI_LAYER]) {
         if (map.getLayer(layer)) map.removeLayer(layer);
@@ -134,7 +140,12 @@ function installKeptLayers(
         source: POI_SOURCE,
         paint: {
             'circle-radius': 4,
-            'circle-color': '#f97316',
+            'circle-color': [
+                'case',
+                ['==', ['get', 'completed'], true],
+                '#16a34a',
+                '#f97316',
+            ],
             'circle-opacity': 0.95,
             'circle-stroke-color': '#fff',
             'circle-stroke-width': 1.25,
@@ -144,7 +155,7 @@ function installKeptLayers(
 
 /** Refresh just the POI marker source without touching the bbox
  *  layers, for the cheap path when only `picks` changed. */
-function updatePoiSource(map: MapLibreMap, picks: Record<string, Poi | null>) {
+function updatePoiSource(map: MapLibreMap, picks: Record<string, PoiPickEntry>) {
     const source = map.getSource(POI_SOURCE) as maplibregl.GeoJSONSource | undefined;
     if (source) source.setData(toPoiCollection(picks));
 }
@@ -158,9 +169,13 @@ export function KeptBboxesMap({
     error,
     picks,
     picking,
+    savingPickCompleted,
     onPickPoi,
+    onSetPickCompleted,
     onOpenFocus,
     openingFocus = EMPTY_OPENING_FOCUS,
+    onRemoveFromKept,
+    removingKeptBboxId,
 }: KeptBboxesMapProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
@@ -171,8 +186,10 @@ export function KeptBboxesMap({
     const picksRef = useRef(picks);
     const pickingRef = useRef(picking);
     const onPickPoiRef = useRef(onPickPoi);
+    const onSetPickCompletedRef = useRef(onSetPickCompleted);
     const onOpenFocusRef = useRef(onOpenFocus);
     const openingFocusRef = useRef(openingFocus);
+    const savingCompletedRef = useRef(savingPickCompleted);
     useEffect(() => {
         keptRef.current = keptBboxes;
     });
@@ -183,7 +200,13 @@ export function KeptBboxesMap({
         pickingRef.current = picking;
     });
     useEffect(() => {
+        savingCompletedRef.current = savingPickCompleted;
+    });
+    useEffect(() => {
         onPickPoiRef.current = onPickPoi;
+    });
+    useEffect(() => {
+        onSetPickCompletedRef.current = onSetPickCompleted;
     });
     useEffect(() => {
         onOpenFocusRef.current = onOpenFocus;
@@ -191,6 +214,22 @@ export function KeptBboxesMap({
     useEffect(() => {
         openingFocusRef.current = openingFocus;
     });
+    const onRemoveFromKeptRef = useRef(onRemoveFromKept);
+    const removingKeptRef = useRef(removingKeptBboxId);
+    useEffect(() => {
+        onRemoveFromKeptRef.current = onRemoveFromKept;
+    });
+    useEffect(() => {
+        removingKeptRef.current = removingKeptBboxId;
+    });
+
+    // Close the popup if its bbox was removed from the list (e.g. DELETE kept).
+    useEffect(() => {
+        const openId = popupBboxRef.current;
+        if (!openId) return;
+        if (keptBboxes.some((b) => b.id === openId)) return;
+        popupRef.current?.remove();
+    }, [keptBboxes]);
 
     // Track whether fit-bounds has already run, so reloads via the
     // hook's `reload()` don't yank the user's current pan/zoom.
@@ -211,14 +250,22 @@ export function KeptBboxesMap({
         const handleOpenFocus = onOpenFocusRef.current
             ? (id: string) => onOpenFocusRef.current!(id)
             : undefined;
+        const entry = picksRef.current[bbox.id];
         root.render(
             <KeptBboxPopup
                 bbox={bbox}
-                pickedPoi={picksRef.current[bbox.id]}
+                pickedPoi={entry?.poi}
+                pickCompleted={entry?.completed ?? false}
                 isPicking={pickingRef.current.has(bbox.id)}
+                isSavingPickCompleted={savingCompletedRef.current.has(bbox.id)}
                 onPick={(id) => onPickPoiRef.current(id)}
+                onSetPickCompleted={(id, completed) =>
+                    void onSetPickCompletedRef.current(id, completed)
+                }
                 onOpenFocus={handleOpenFocus}
                 isOpeningFocus={openingFocusRef.current.has(bbox.id)}
+                onRemoveFromKept={(id) => onRemoveFromKeptRef.current(id)}
+                isRemovingKept={removingKeptRef.current === bbox.id}
             />,
         );
     };
@@ -356,7 +403,7 @@ export function KeptBboxesMap({
         if (!root || !openId) return;
         const bbox = keptBboxes.find((b) => b.id === openId);
         if (bbox) renderPopupBody(root, bbox);
-    }, [picks, picking, openingFocus, keptBboxes]);
+    }, [picks, picking, savingPickCompleted, openingFocus, keptBboxes, removingKeptBboxId]);
 
     return (
         <div className="kept-bboxes-map">

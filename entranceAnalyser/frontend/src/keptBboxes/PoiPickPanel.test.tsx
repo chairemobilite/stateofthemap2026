@@ -10,6 +10,7 @@ function renderPanel(overrides: Partial<PoiPickPanelProps> = {}) {
     const props: PoiPickPanelProps = {
         bboxId: 'bbox-1',
         pickedPoi: undefined,
+        pickCompleted: false,
         isPicking: false,
         onPick: noop,
         ...overrides,
@@ -39,7 +40,7 @@ describe('<PoiPickPanel />', () => {
     });
 
     it('renders the empty-state message when picked but Overpass returned nothing', () => {
-        renderPanel({ pickedPoi: null });
+        renderPanel({ pickedPoi: null, pickCompleted: false });
         expect(screen.getByText('No POI in this cell.')).toBeInTheDocument();
         expect(screen.queryByRole('button')).not.toBeInTheDocument();
     });
@@ -52,6 +53,7 @@ describe('<PoiPickPanel />', () => {
                 tags: { shop: 'bakery', name: 'Pain Doré' },
                 group: 'shops',
             }),
+            pickCompleted: false,
         });
         expect(screen.getByText('Pain Doré')).toBeInTheDocument();
         expect(screen.getByText('shops')).toBeInTheDocument();
@@ -67,6 +69,7 @@ describe('<PoiPickPanel />', () => {
                 osm_id: 99,
                 tags: { amenity: 'bench' },
             }),
+            pickCompleted: false,
         });
         expect(screen.getByText('node 99')).toBeInTheDocument();
         expect(screen.getByText('amenity=bench')).toBeInTheDocument();
@@ -78,19 +81,19 @@ describe('<PoiPickPanel />', () => {
     ])(
         'omits the "Open focus map" button when there is no real POI ($name)',
         ({ pickedPoi }) => {
-            renderPanel({ pickedPoi, onOpenFocus: vi.fn() });
+            renderPanel({ pickedPoi, pickCompleted: false, onOpenFocus: vi.fn() });
             expect(screen.queryByRole('button', { name: /open focus map/i })).not.toBeInTheDocument();
         },
     );
 
     it('omits the "Open focus map" button when no onOpenFocus handler is provided', () => {
-        renderPanel({ pickedPoi: makePoi() });
+        renderPanel({ pickedPoi: makePoi(), pickCompleted: false });
         expect(screen.queryByRole('button', { name: /open focus map/i })).not.toBeInTheDocument();
     });
 
     it('shows an enabled "Open focus map" button when a POI is picked', () => {
         const onOpenFocus = vi.fn();
-        renderPanel({ bboxId: 'bbox-7', pickedPoi: makePoi(), onOpenFocus });
+        renderPanel({ bboxId: 'bbox-7', pickedPoi: makePoi(), pickCompleted: false, onOpenFocus });
         const button = screen.getByRole('button', { name: 'Open focus map' });
         expect((button as HTMLButtonElement).disabled).toBe(false);
         fireEvent.click(button);
@@ -100,10 +103,23 @@ describe('<PoiPickPanel />', () => {
     it('flips the "Open focus map" button to a disabled "Loading…" while the focus load is in flight', () => {
         renderPanel({
             pickedPoi: makePoi(),
+            pickCompleted: false,
             onOpenFocus: vi.fn(),
             isOpeningFocus: true,
         });
         const button = screen.getByRole('button', { name: 'Loading…' });
         expect((button as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('fires onSetPickCompleted when the completed checkbox is toggled', () => {
+        const onSetPickCompleted = vi.fn();
+        renderPanel({
+            pickedPoi: makePoi(),
+            pickCompleted: false,
+            onSetPickCompleted,
+        });
+        const box = screen.getByRole('checkbox', { name: /mark poi completed/i });
+        fireEvent.click(box);
+        expect(onSetPickCompleted).toHaveBeenCalledExactlyOnceWith('bbox-1', true);
     });
 });

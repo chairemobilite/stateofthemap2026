@@ -51,4 +51,17 @@ describe('useKeptBboxes', () => {
         expect(result.current.keptBboxes).toEqual(second);
         expect(fetchAll).toHaveBeenCalledTimes(2);
     });
+
+    it('removeKept calls DELETE then filters local state', async () => {
+        const a = makeKeptBbox({ id: 'a' });
+        const b = makeKeptBbox({ id: 'b' });
+        const fetchAll = vi.fn().mockResolvedValue([a, b]);
+        const deleteOne = vi.fn().mockResolvedValue(undefined);
+        const { result } = renderHook(() => useKeptBboxes({ fetchAll, deleteOne }));
+        await waitFor(() => expect(result.current.status).toBe('idle'));
+
+        await act(() => result.current.removeKept('a'));
+        expect(deleteOne).toHaveBeenCalledExactlyOnceWith('a');
+        expect(result.current.keptBboxes).toEqual([b]);
+    });
 });
