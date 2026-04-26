@@ -44,6 +44,49 @@ impl OsmType {
             _ => None,
         }
     }
+
+    /// Lowercase Overpass QL keyword for this type.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Way => "way",
+            Self::Relation => "relation",
+        }
+    }
+}
+
+/// Parse `node/123`, `way/456`, or `relation/789` (optional spaces).
+pub fn parse_osm_ref(raw: &str) -> Result<(OsmType, i64), String> {
+    let s = raw.trim();
+    let (kind, id_part) = s
+        .split_once('/')
+        .ok_or_else(|| "expected node/123, way/456, or relation/789".to_string())?;
+    let id: i64 = id_part
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid OSM id in {s:?}"))?;
+    if id <= 0 {
+        return Err("OSM id must be positive".into());
+    }
+    let osm_type = match kind.trim().to_lowercase().as_str() {
+        "node" => OsmType::Node,
+        "way" => OsmType::Way,
+        "relation" => OsmType::Relation,
+        other => {
+            return Err(format!("type must be node, way, or relation (got {other:?})"));
+        }
+    };
+    Ok((osm_type, id))
+}
+
+/// One-element Overpass query: `out center tags` yields node lat/lon or way/relation centroid.
+pub fn build_osm_anchor_query(osm_type: OsmType, id: i64) -> String {
+    format!(
+        "[out:json][timeout:{t}];\n{ty}({id});\nout center tags;\n",
+        t = OVERPASS_QUERY_TIMEOUT_S,
+        ty = osm_type.as_str(),
+        id = id,
+    )
 }
 
 /// One picked POI, tagged with the group it matched in
@@ -111,6 +154,22 @@ impl OverpassClient {
             .into_iter()
             .filter_map(|raw| raw.into_poi(config))
             .collect())
+    }
+
+    /// Resolve one OSM object's representative point via Overpass `out center`
+    /// (node → coordinates; way/relation polygon → computed centre).
+    pub async fn fetch_osm_anchor_center(
+        &self,
+        osm_type: OsmType,
+        id: i64,
+    ) -> Result<([f64; 2], BTreeMap<String, String>), OverpassError> {
+        let ql = build_osm_anchor_query(osm_type, id);
+        let parsed: OverpassResponse = self.execute_ql(&ql).await?;
+        let el = take_matching_anchor_element(parsed.elements, osm_type, id)?;
+        let center = el
+            .center_lon_lat()
+            .ok_or(OverpassError::InvalidOsmGeometry)?;
+        Ok((center, el.tags))
     }
 
     /// POST a raw Overpass QL query and decode the response as `T`.
@@ -221,19 +280,39 @@ struct LatLon {
     lon: f64,
 }
 
+/// Pick the Overpass element that matches the requested `type(id)`.
+///
+/// Some mirrors or future QL variants can append extra `elements` (e.g. a
+/// leading object without geometry). Using `.next()` would mis-read the
+/// centre; we always resolve by `type` + `id`.
+fn take_matching_anchor_element(
+    elements: Vec<RawElement>,
+    osm_type: OsmType,
+    id: i64,
+) -> Result<RawElement, OverpassError> {
+    let want = osm_type.as_str();
+    elements
+        .into_iter()
+        .find(|e| e.osm_type.eq_ignore_ascii_case(want) && e.id == id)
+        .ok_or(OverpassError::NoOsmElement)
+}
+
 impl RawElement {
+    /// `[lon, lat]` from node `lat`/`lon` or from `out center` on ways/relations.
+    fn center_lon_lat(&self) -> Option<[f64; 2]> {
+        match (self.lat, self.lon, self.center.as_ref()) {
+            (Some(lat), Some(lon), _) => Some([lon, lat]),
+            (_, _, Some(c)) => Some([c.lon, c.lat]),
+            _ => None,
+        }
+    }
+
     /// Turn a raw Overpass element into a [`Poi`], dropping elements
     /// that lack a usable center or whose tags match no group.
     fn into_poi(self, config: &PoiTagConfig) -> Option<Poi> {
         let osm_type = OsmType::from_overpass(&self.osm_type)?;
         let group = config.group_for_tags(&self.tags)?.to_string();
-        let center = match (self.lat, self.lon, self.center) {
-            // Nodes: top-level `lat`/`lon` are authoritative.
-            (Some(lat), Some(lon), _) => [lon, lat],
-            // Ways / relations: the requested `out center` shortcut.
-            (_, _, Some(c)) => [c.lon, c.lat],
-            _ => return None,
-        };
+        let center = self.center_lon_lat()?;
         Some(Poi {
             osm_type,
             osm_id: self.id,
@@ -249,6 +328,10 @@ impl RawElement {
 /// Every failure mode `fetch_pois` can hit.
 #[derive(Debug)]
 pub enum OverpassError {
+    /// Overpass returned no element for the requested `type(id)`.
+    NoOsmElement,
+    /// Element lacked coordinates / `center` (unexpected for `out center`).
+    InvalidOsmGeometry,
     /// Connection error, TLS failure, timeout, DNS — all reqwest
     /// transport failures collapse here.
     Network(reqwest::Error),
@@ -263,6 +346,8 @@ pub enum OverpassError {
 impl std::fmt::Display for OverpassError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NoOsmElement => write!(f, "OSM object not found in Overpass"),
+            Self::InvalidOsmGeometry => write!(f, "OSM object has no usable centre coordinates"),
             Self::Network(e) => write!(f, "Overpass transport failure: {e}"),
             Self::Http { status, body } => {
                 let excerpt: String = body.chars().take(200).collect();
@@ -278,6 +363,7 @@ impl std::error::Error for OverpassError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bbox::CandidateSource;
     use crate::poi_config::PoiTagConfig;
     use uuid::Uuid;
     use wiremock::matchers::{method, path};
@@ -301,6 +387,9 @@ mod tests {
             max_density_ratio: 0.0,
             built_volume: 0.0,
             max_built_volume_ratio: 0.0,
+            candidate_source: CandidateSource::Random,
+            custom_osm_type: None,
+            custom_osm_id: None,
         }
     }
 
@@ -551,5 +640,80 @@ mod tests {
             .await
             .expect_err("malformed JSON must surface as an error");
         assert!(matches!(err, OverpassError::Decode(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn parse_osm_ref_accepts_spaces() {
+        assert_eq!(parse_osm_ref("node/1").unwrap(), (OsmType::Node, 1));
+        assert_eq!(parse_osm_ref("  way / 99 ").unwrap(), (OsmType::Way, 99));
+        assert!(parse_osm_ref("nope").is_err());
+    }
+
+    #[test]
+    fn build_osm_anchor_query_targets_one_element() {
+        let q = build_osm_anchor_query(OsmType::Relation, 99);
+        assert!(q.contains("relation(99)"));
+        assert!(q.contains("out center tags;"));
+    }
+
+    #[tokio::test]
+    async fn anchor_center_picks_matching_element_not_first_in_array() {
+        let server = MockServer::start().await;
+        // Decoy first: would be wrong if we still used `.elements.into_iter().next()`.
+        let body = make_response(serde_json::json!([
+            {
+                "type": "node",
+                "id": 999,
+                "lat": 35.0,
+                "lon": 105.0,
+                "tags": {}
+            },
+            {
+                "type": "relation",
+                "id": 3437968,
+                "center": {"lat": 45.5055962, "lon": -73.6148766},
+                "tags": {"name": "Université de Montréal"}
+            },
+        ]));
+        Mock::given(method("POST"))
+            .and(path("/api/interpreter"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let (center, tags) = client
+            .fetch_osm_anchor_center(OsmType::Relation, 3437968)
+            .await
+            .unwrap();
+        assert!(
+            (center[0] + 73.6148766).abs() < 1e-6,
+            "expected Montréal lon, got {center:?}"
+        );
+        assert!(
+            (center[1] - 45.5055962).abs() < 1e-6,
+            "expected Montréal lat, got {center:?}"
+        );
+        assert_eq!(tags.get("name").map(String::as_str), Some("Université de Montréal"));
+    }
+
+    #[tokio::test]
+    async fn anchor_center_no_match_when_elements_are_other_objects() {
+        let server = MockServer::start().await;
+        let body = make_response(serde_json::json!([
+            {"type": "node", "id": 1, "lat": 1.0, "lon": 2.0, "tags": {}},
+        ]));
+        Mock::given(method("POST"))
+            .and(path("/api/interpreter"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let err = client
+            .fetch_osm_anchor_center(OsmType::Relation, 3437968)
+            .await
+            .expect_err("wrong type/id must yield NoOsmElement");
+        assert!(matches!(err, OverpassError::NoOsmElement), "got {err:?}");
     }
 }
