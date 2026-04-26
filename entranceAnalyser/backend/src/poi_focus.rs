@@ -13,14 +13,23 @@
 //!   `out geom` is significantly more involved. A first-cut focus map
 //!   that under-counts the few multi-polygon buildings is acceptable;
 //!   we can lift the restriction once it bites.
+//!   _Known limitation_: any building mapped as
+//!   `relation[building][type=multipolygon]` is silently skipped,
+//!   even with `building=yes`. Widening the user-set radius does not
+//!   help — only a QL change here will. Tracked alongside the
+//!   per-request radius work in PR11.
 //! * **`entrance=*` nodes only**, not `door=*`. The mapping question is
 //!   "does this building have its entrances mapped?", not "does any
 //!   sub-feature have a door tag". Including `door=*` would inflate the
 //!   coverage signal with interior doors and obscure what we want to
 //!   measure.
-//! * **Radius driven by the caller.** The handler reads
-//!   `POI_FOCUS_RADIUS_M` from config (default 150 m) and passes it
-//!   through, so an operator can widen / shrink without touching code.
+//! * **Radius driven by the caller.** The handler resolves the
+//!   buffer from `?radius_m=` (per-request override) or
+//!   `POI_FOCUS_RADIUS_M` (server default, 150 m) and passes it
+//!   through, so an operator can widen / shrink either globally or
+//!   for a single POI without touching code. The handler also
+//!   short-circuits the cache only when the cached radius matches
+//!   the requested one.
 //!
 //! The QL builder is public so handler-level tests can assert on its
 //! output without a network round-trip.

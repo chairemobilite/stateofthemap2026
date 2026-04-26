@@ -41,7 +41,10 @@ body {
     position: absolute;
     top: 1rem;
     right: 1rem;
-    z-index: 1;
+    /* Sit above any in-flow page chrome, including the focus map's
+       header bar. Numerically generous so future additions to the
+       header don't accidentally re-cover the toggle. */
+    z-index: 10;
     display: flex;
     gap: 0.25rem;
     padding: 0.25rem;
@@ -438,11 +441,23 @@ body {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.5rem 0.75rem;
+    /* Right padding leaves a gap for the floating BasemapToggle
+       (position: absolute; top: 1rem; right: 1rem) so the radius
+       form does not visually collide with the basemap buttons. The
+       14rem figure tracks the toggle's "OSM" + "Aerial (ESRI)"
+       buttons -- update if BASEMAPS gains entries. */
+    padding: 0.5rem 14rem 0.5rem 0.75rem;
     background: rgba(255, 255, 255, 0.95);
     border-bottom: 1px solid #e4e4e7;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-    z-index: 2;
+    /* Header is in the flex flow; an explicit positive z-index here
+       would paint the (opaque) header bar on top of any sibling
+       absolute overlay -- specifically the BasemapToggle, which
+       lives in `.app` at z-index 1. Keep the header at the default
+       stacking level so the toggle and any MapLibre control added
+       to the canvas remain clickable and visible. */
+    position: relative;
+    z-index: 0;
 }
 
 .poi-focus-map__back {
@@ -474,6 +489,47 @@ body {
     font-size: 0.8rem;
     color: #3f3f46;
     font-variant-numeric: tabular-nums;
+}
+
+.poi-focus-map__radius {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: #3f3f46;
+}
+
+.poi-focus-map__radius input {
+    width: 5.5rem;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+}
+
+.poi-focus-map__radius input[aria-invalid='true'] {
+    border-color: #dc2626;
+    background: #fef2f2;
+}
+
+.poi-focus-map__radius button {
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    padding: 0.2rem 0.6rem;
+    font: inherit;
+    cursor: pointer;
+    background: #fff;
+}
+
+.poi-focus-map__radius button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.poi-focus-map__radius-help {
+    color: #71717a;
+    font-size: 0.75rem;
 }
 
 .poi-focus-map__canvas {

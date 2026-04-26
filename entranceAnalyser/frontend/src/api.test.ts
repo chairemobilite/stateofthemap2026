@@ -155,23 +155,34 @@ describe('api client', () => {
         },
     };
 
-    it('pickPoiFocus POSTs to /poi_focus with the bbox id in the URL', async () => {
-        const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS });
-        const reply = await pickPoiFocus(SAMPLE_BBOX.id, fetchFn);
-        expect(fetchFn).toHaveBeenCalledTimes(1);
-        const [url, init] = fetchFn.mock.calls[0];
-        expect(url).toBe(`/api/bbox/kept/${SAMPLE_BBOX.id}/poi_focus`);
-        expect(init.method).toBe('POST');
-        expect(reply).toEqual({ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS });
-    });
+    it.each([
+        // (radiusM, expected query suffix) — undefined omits the query param entirely
+        // so existing /poi_focus consumers see the exact URL they used to.
+        [undefined, ''],
+        [200, '?radius_m=200'],
+        [10, '?radius_m=10'],
+        [2000, '?radius_m=2000'],
+    ] as const)(
+        'pickPoiFocus POSTs to /poi_focus with radiusM=%s → suffix=%s',
+        async (radiusM, suffix) => {
+            const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS });
+            const reply = await pickPoiFocus(SAMPLE_BBOX.id, radiusM, fetchFn);
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+            const [url, init] = fetchFn.mock.calls[0];
+            expect(url).toBe(`/api/bbox/kept/${SAMPLE_BBOX.id}/poi_focus${suffix}`);
+            expect(init.method).toBe('POST');
+            expect(reply).toEqual({ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS });
+        },
+    );
 
     it.each([
+        ['400 Bad Request (radius out of range)', 400, 'Bad Request'],
         ['409 Conflict (no prior pick)', 409, 'Conflict'],
         ['422 Unprocessable (empty pick)', 422, 'Unprocessable Entity'],
         ['502 Bad Gateway (overpass)', 502, 'Bad Gateway'],
     ] as const)('pickPoiFocus surfaces %s as a thrown Error', async (_label, status, statusText) => {
         const fetchFn = jsonFetch({ message: 'nope' }, { status, statusText });
-        await expect(pickPoiFocus(SAMPLE_BBOX.id, fetchFn)).rejects.toThrow(
+        await expect(pickPoiFocus(SAMPLE_BBOX.id, undefined, fetchFn)).rejects.toThrow(
             new RegExp(`${status} ${statusText}`),
         );
     });

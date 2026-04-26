@@ -26,8 +26,9 @@ export type PoiFocusStatus = 'loading' | 'idle' | 'error';
 export interface UsePoiFocusOptions {
     /** Override for the bulk loader, mostly for tests. */
     fetchAll?: () => Promise<PoiFocusRecord[]>;
-    /** Override for the per-bbox load action, mostly for tests. */
-    loadOne?: (bboxId: string) => Promise<PoiFocusRecord>;
+    /** Override for the per-bbox load action, mostly for tests.
+     *  The optional `radiusM` mirrors `pickPoiFocus`'s second arg. */
+    loadOne?: (bboxId: string, radiusM?: number) => Promise<PoiFocusRecord>;
 }
 
 export interface PoiFocusState {
@@ -39,8 +40,11 @@ export interface PoiFocusState {
     status: PoiFocusStatus;
     error: string | null;
     /** Fetch (and cache) the focus result for one bbox. Idempotent
-     *  on the server side: subsequent calls return the cache. */
-    loadFocus: (bboxId: string) => Promise<void>;
+     *  on the server side when `radiusM` matches the cached row;
+     *  a different radius re-issues Overpass and overwrites the
+     *  cached value. Omitting `radiusM` lets the backend fall back
+     *  to its `POI_FOCUS_RADIUS_M` default. */
+    loadFocus: (bboxId: string, radiusM?: number) => Promise<void>;
     reload: () => Promise<void>;
 }
 
@@ -57,7 +61,9 @@ export function usePoiFocus(options: UsePoiFocusOptions = {}): PoiFocusState {
         [options.fetchAll],
     );
     const loadOne = useMemo(
-        () => options.loadOne ?? ((bboxId: string) => pickPoiFocus(bboxId)),
+        () =>
+            options.loadOne ??
+            ((bboxId: string, radiusM?: number) => pickPoiFocus(bboxId, radiusM)),
         [options.loadOne],
     );
 
@@ -90,7 +96,7 @@ export function usePoiFocus(options: UsePoiFocusOptions = {}): PoiFocusState {
     }, [reload]);
 
     const loadFocus = useCallback(
-        async (bboxId: string) => {
+        async (bboxId: string, radiusM?: number) => {
             setError(null);
             setLoading((s) => {
                 const next = new Set(s);
@@ -98,7 +104,7 @@ export function usePoiFocus(options: UsePoiFocusOptions = {}): PoiFocusState {
                 return next;
             });
             try {
-                const row = await loadOne(bboxId);
+                const row = await loadOne(bboxId, radiusM);
                 setFocuses((f) => ({ ...f, [row.bbox_id]: row.result }));
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));

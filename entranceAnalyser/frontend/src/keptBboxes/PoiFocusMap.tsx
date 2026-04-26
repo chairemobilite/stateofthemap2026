@@ -16,7 +16,7 @@
 //!  - picked POI marker (orange dot, identical to the overview map
 //!    so the visual lineage from the popup is obvious)
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -33,6 +33,12 @@ import {
     panoramaxUrl,
     type MapPoint,
 } from './mapLinks';
+import {
+    FOCUS_RADIUS_DEFAULT_M,
+    FOCUS_RADIUS_MAX_M,
+    FOCUS_RADIUS_MIN_M,
+    parseFocusRadiusInput,
+} from './focusRadius';
 import {
     toBufferRing,
     toBuildingsCollection,
@@ -53,11 +59,12 @@ export interface PoiFocusMapProps {
     basemapId: BasemapId;
     /** Return to the overview view; the parent decides what that means. */
     onBack: () => void;
-    /** Triggered once on mount when no cached focus is available, so
-     *  the parent's hook fires its POST. Kept as a callback (not an
-     *  internal effect) so tests can stub it without touching the
-     *  network. */
-    onLoadFocus: (bboxId: string) => void;
+    /** Triggered on mount when no cached focus is available, and on
+     *  every form submission once the user changes the radius. The
+     *  optional `radiusM` is forwarded to the backend's
+     *  `?radius_m=` override; omit it to fall back to the server's
+     *  default. */
+    onLoadFocus: (bboxId: string, radiusM?: number) => void;
     /** OSM editor URL template, normally fetched via `useAppConfig`.
      *  Threaded as a prop instead of read from a hook here so this
      *  component stays a pure MapLibre wrapper that's easy to test in
@@ -205,6 +212,34 @@ export function PoiFocusMap({
         onLoadFocus(bbox.id);
     }, [bbox.id, focus, onLoadFocus]);
 
+    // Radius form: seeded from the cached focus when present (so
+    // re-opening a bbox shows the radius the cached row was computed
+    // at) and from `FOCUS_RADIUS_DEFAULT_M` otherwise. Stored as a
+    // string to allow intermediate edits ("", "1", "12") without
+    // resetting the cursor. The set-during-render pattern keeps the
+    // input in sync when the cached row arrives later (cold load) or
+    // changes (user submitted a different radius).
+    const [radiusInput, setRadiusInput] = useState<string>(() =>
+        String(focus?.radius_m ?? FOCUS_RADIUS_DEFAULT_M),
+    );
+    const [lastSyncedRadius, setLastSyncedRadius] = useState<number | undefined>(
+        focus?.radius_m,
+    );
+    if (focus && focus.radius_m !== lastSyncedRadius) {
+        setLastSyncedRadius(focus.radius_m);
+        setRadiusInput(String(focus.radius_m));
+    }
+
+    const parsedRadius = useMemo(() => parseFocusRadiusInput(radiusInput), [radiusInput]);
+    const radiusUnchanged = focus !== undefined && parsedRadius === focus.radius_m;
+    const submitDisabled = loading || parsedRadius === null || radiusUnchanged;
+
+    const handleRadiusSubmit = (event: FormEvent) => {
+        event.preventDefault();
+        if (submitDisabled || parsedRadius === null) return;
+        onLoadFocus(bbox.id, parsedRadius);
+    };
+
     useEffect(() => {
         if (!containerRef.current) return;
         const initial = findBasemap(basemapId) ?? findBasemap(DEFAULT_BASEMAP_ID)!;
@@ -326,9 +361,34 @@ export function PoiFocusMap({
                     <div className="poi-focus-map__counts" aria-label="Feature counts">
                         <span>{focus.buildings.features.length} buildings</span>
                         <span>{focus.entrances.features.length} entrances</span>
-                        <span>r = {focus.radius_m} m</span>
                     </div>
                 )}
+                <form
+                    className="poi-focus-map__radius"
+                    onSubmit={handleRadiusSubmit}
+                    aria-label="Focus radius"
+                >
+                    <label htmlFor="poi-focus-radius-input">Radius (m)</label>
+                    <input
+                        id="poi-focus-radius-input"
+                        type="number"
+                        inputMode="numeric"
+                        min={FOCUS_RADIUS_MIN_M}
+                        max={FOCUS_RADIUS_MAX_M}
+                        step={10}
+                        value={radiusInput}
+                        onChange={(e) => setRadiusInput(e.target.value)}
+                        disabled={loading}
+                        aria-invalid={parsedRadius === null}
+                        aria-describedby="poi-focus-radius-help"
+                    />
+                    <button type="submit" disabled={submitDisabled}>
+                        Apply
+                    </button>
+                    <span id="poi-focus-radius-help" className="poi-focus-map__radius-help">
+                        {FOCUS_RADIUS_MIN_M}–{FOCUS_RADIUS_MAX_M} m
+                    </span>
+                </form>
             </header>
 
             <div
