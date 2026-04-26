@@ -476,6 +476,47 @@ body {
     font-variant-numeric: tabular-nums;
 }
 
+.poi-focus-map__radius {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: #3f3f46;
+}
+
+.poi-focus-map__radius input {
+    width: 5.5rem;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+}
+
+.poi-focus-map__radius input[aria-invalid='true'] {
+    border-color: #dc2626;
+    background: #fef2f2;
+}
+
+.poi-focus-map__radius button {
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    padding: 0.2rem 0.6rem;
+    font: inherit;
+    cursor: pointer;
+    background: #fff;
+}
+
+.poi-focus-map__radius button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.poi-focus-map__radius-help {
+    color: #71717a;
+    font-size: 0.75rem;
+}
+
 .poi-focus-map__canvas {
     flex: 1;
     position: relative;
