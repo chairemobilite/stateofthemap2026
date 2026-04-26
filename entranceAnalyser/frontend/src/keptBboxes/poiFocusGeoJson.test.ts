@@ -2,8 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { makePoi, makePoiFocus } from '../test/fixtures';
 import {
+    buildingCentroidSnapsFromBuildings,
+    entranceCentersFromFocus,
+    parseOsmWayIdFromFeatureId,
+    polygonOuterRingCentroid,
     toBufferRing,
     toBuildingsCollection,
+    toBuildingCentroidsCollection,
     toEntrancesCollection,
     toFocusBounds,
     toPickedPoiCollection,
@@ -30,6 +35,52 @@ describe('poiFocusGeoJson', () => {
         });
     });
 
+    it('entranceCentersFromFocus collects Point coordinates', () => {
+        const focus = makePoiFocus();
+        expect(entranceCentersFromFocus(focus)).toEqual([[-73.55, 45.55]]);
+        expect(entranceCentersFromFocus(undefined)).toEqual([]);
+    });
+
+    it.each([
+        ['way/42', 42],
+        ['node/1', null],
+        ['way/', null],
+        ['', null],
+        [123, null],
+    ] as const)('parseOsmWayIdFromFeatureId(%j) → %s', (id, expected) => {
+        expect(parseOsmWayIdFromFeatureId(id)).toBe(expected);
+    });
+
+    it('polygonOuterRingCentroid matches the centre of an axis-aligned square', () => {
+        const ring: [number, number][] = [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1],
+            [0, 0],
+        ];
+        const [lon, lat] = polygonOuterRingCentroid(ring);
+        expect(lon).toBeCloseTo(0.5, 6);
+        expect(lat).toBeCloseTo(0.5, 6);
+    });
+
+    it('buildingCentroidSnapsFromBuildings returns one snap per polygon way', () => {
+        const focus = makePoiFocus();
+        const snaps = buildingCentroidSnapsFromBuildings(focus.buildings);
+        expect(snaps).toHaveLength(1);
+        expect(snaps[0].wayId).toBe(1);
+        expect(snaps[0].lon).toBeCloseTo(-73.55, 5);
+        expect(snaps[0].lat).toBeCloseTo(45.55, 5);
+    });
+
+    it('toBuildingCentroidsCollection emits Point features', () => {
+        const focus = makePoiFocus();
+        const fc = toBuildingCentroidsCollection(focus);
+        expect(fc.features).toHaveLength(1);
+        expect(fc.features[0].geometry.type).toBe('Point');
+        expect(fc.features[0].id).toBe('way/1');
+    });
+
     it('toPickedPoiCollection emits a single Point feature with provenance', () => {
         const poi = makePoi({ osm_id: 99, group: 'shops' });
         const out = toPickedPoiCollection(poi);
@@ -41,7 +92,14 @@ describe('poiFocusGeoJson', () => {
             osm_type: 'node',
             osm_id: 99,
             group: 'shops',
+            completed: false,
         });
+    });
+
+    it('toPickedPoiCollection sets completed when requested', () => {
+        const poi = makePoi();
+        const out = toPickedPoiCollection(poi, true);
+        expect(out.features[0].properties).toMatchObject({ completed: true });
     });
 
     it.each([

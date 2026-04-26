@@ -15,14 +15,22 @@ backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
            migrations/0001_init.sql                schema (grid + kept_bboxes + analyses)
            migrations/0002_grid_built_volume.sql   built_volume + grid_meta totals
            migrations/0003_kept_bboxes_built_volume.sql   built context on kept rows
+           migrations/0004_poi_focus_measurements.sql   persisted focus-map measure polylines
+           migrations/0005_poi_focus_measurement_types.sql   measure purpose + entrance type columns
+           migrations/0006_poi_focus_entrance_centroid_types.sql   extra entrance_type CHECK values
+           migrations/0007_poi_focus_measurement_purpose_rename.sql   measurement_type renames + new purposes
+           migrations/0008_poi_focus_measurement_start_origin.sql   first-vertex anchor (centroid vs OSM entrance)
+           migrations/0009_poi_focus_measurement_type_entrance.sql   measurement_type `to_nearest_entrance`
            src/config.rs                           PG_* env → database URL
            src/db.rs                               pool factory + embedded migrator
            src/sampler.rs                          uniform/population/built/blended draws
-           src/storage.rs                          PgStore: kept_bboxes + analyses
+           src/storage.rs                          PgStore: kept_bboxes + analyses + measurements
+           src/focus_measurements.rs               measure polyline validation + Haversine length
            src/poi_config.rs                       poi_tags.yml loader (groups + exceptions)
            src/overpass.rs                         Overpass QL client + result decoder
            src/poi_focus.rs                        focus-map fetcher (buildings + entrances)
            src/bin/build_grid.rs                   offline aggregation tool
+           src/bin/migrate.rs                      `entrance-analyser-migrate` — apply SQL migrations
 config/    Runtime config consumed by the analysis pipeline
            poi_tags.yml                            POI tag groups + exceptions
 frontend/  React + Vite + MapLibre GL — three screens:
@@ -31,7 +39,12 @@ frontend/  React + Vite + MapLibre GL — three screens:
            src/keptBboxes/                         Kept-bboxes overview map + popup + POI picker
            src/keptBboxes/PoiFocusMap.tsx          Focus map (buildings + entrances around picked POI)
            src/keptBboxes/usePoiFocus.ts           Hook owning the focus state (bulk hydrate + POST)
+           src/keptBboxes/usePoiFocusMeasurements.ts   CRUD for persisted measure lines (per bbox)
            src/keptBboxes/poiFocusGeoJson.ts       Pure helpers: buffer ring + collection casts
+           src/keptBboxes/focusMeasurementGeoJson.ts   GeoJSON for saved measure LineStrings
+           src/keptBboxes/measure.ts               Path length + walking-time helpers (tests)
+           src/keptBboxes/measurementStart.ts      Infer first-vertex anchor for POST/PATCH (tests)
+           src/keptBboxes/measurementCatalog.ts    measure purpose + entrance type wire values + labels
            src/keptBboxes/MapContextMenu.tsx       Right-click "open in …" menu (presentational)
            src/keptBboxes/mapLinks.ts              URL builders for 7 map services + OSM editor template
            src/keptBboxes/chinaCoords.ts           WGS84 → GCJ-02 → BD09 datum conversion (China)
@@ -44,10 +57,16 @@ The HTTP backend serves these endpoints:
 | GET    | `/api/bbox/random?strategy=…&alpha=…`       | draw a candidate under the given strategy (see below)            |
 | POST   | `/api/bbox/decision`                        | keep or reject a previously drawn bbox (client echoes it back)   |
 | GET    | `/api/bbox/kept`                            | list every persisted kept bbox                                   |
+| DELETE | `/api/bbox/kept/:id`                        | remove one kept bbox (cascades `analyses` + `poi_focus_measurements`) |
 | POST   | `/api/bbox/kept/:id/poi_pick`               | pick (and cache) one POI inside a kept bbox via Overpass         |
+| PATCH  | `/api/bbox/kept/:id/poi_pick`               | set reviewer `completed` on the cached pick (JSON `completed` bool); `422` if `true` when `poi` is null |
 | GET    | `/api/analyses/poi_picks`                   | list every cached POI pick, in insertion order                   |
-| POST   | `/api/bbox/kept/:id/poi_focus`              | fetch (and cache) buildings + entrances around the picked POI    |
+| POST   | `/api/bbox/kept/:id/poi_focus`              | fetch (and cache) buildings + entrances around the picked POI (`?radius_m=`, `?refresh=true`) |
 | GET    | `/api/analyses/poi_focuses`                 | list every cached focus result, in insertion order               |
+| GET    | `/api/bbox/kept/:id/poi_focus_measurements` | list persisted measurement polylines for that kept bbox          |
+| POST   | `/api/bbox/kept/:id/poi_focus_measurements`   | create one measurement (incl. `start_origin`, `start_osm_node_id`) |
+| PATCH  | `/api/bbox/kept/:id/poi_focus_measurements/:measure_id` | update geometry + speed + start anchor (server recomputes `length_m`) |
+| DELETE | `/api/bbox/kept/:id/poi_focus_measurements/:measure_id` | delete one measurement row                             |
 | GET    | `/api/config`                               | runtime config echoed to the frontend (OSM editor URL, …)        |
 
 ### Sampling strategies
@@ -102,9 +121,21 @@ skipping`) and only creates the databases named in
 installed, `createdb "$PG_DATABASE" && createdb "$PG_DATABASE_TEST"`
 works just as well.
 
-Either way, the backend enables the PostGIS extension automatically on
-startup via the embedded `0001_init.sql` migration — you do **not**
-need to run `sqlx migrate run` by hand.
+The HTTP server also applies any pending migrations from `backend/migrations/`
+when it starts. To **only** run migrations (same `.env` as the server), without
+starting Axum:
+
+```bash
+cd entranceAnalyser
+cargo run --bin entrance-analyser-migrate
+```
+
+That uses `PG_CONNECTION_STRING_PREFIX` + `PG_DATABASE` from `.env` (via
+`dotenvy`, from the **current working directory**). If `.env` sits at the
+monorepo root only, run from there, for example:
+`cargo run --manifest-path entranceAnalyser/backend/Cargo.toml --bin entrance-analyser-migrate`.
+Re-running is a no-op once the schema is up to date. You do **not**
+need the standalone `sqlx migrate run` CLI for this project.
 
 ### 2. Download the source rasters
 
@@ -218,15 +249,15 @@ kept bbox that already has a picked POI:
 | Screen         | What it does                                                                                                        |
 |----------------|---------------------------------------------------------------------------------------------------------------------|
 | `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
-| `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. The popup hosts a **Pick POI** button that runs the Overpass picker on demand; picked features paint as orange dots. |
-| `Focus`        | Zoom-in map anchored on one picked POI: building polygons, entrance markers, and a dashed buffer ring at the server-config radius. Reached via the **Open focus map** button in the popup; **Back** returns to the overview. |
+| `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. The popup hosts a **Pick POI** button that runs the Overpass picker on demand; picked POIs paint as **orange** until you check **Mark POI completed**, then **green** (same flag in the focus map header). |
+| `Focus`        | Zoom-in map anchored on one picked POI: building polygons, entrance markers, and a dashed buffer ring at the server-config radius. Reached via the **Open focus map** button in the popup; **Back** returns to the overview. **Remove from kept…** runs the same `DELETE` as the overview popup (confirms first). |
 
 The `Kept bboxes` map uses a single GeoJSON source per geometry type
 (polygons for the rectangles, points for the low-zoom markers) so the
 visible layer swaps without reloading data. Clicking any feature opens
 a MapLibre popup whose body is a React-rendered `KeptBboxRow`
-(headline info + `Not started` progress pill). The full
-`ProgressStatus` union (`not_started` / `queued` / `running` / `done`
+(headline info + `Not started` / `Started` / `Completed` progress pill). The full
+`ProgressStatus` union (`not_started` / `queued` / `running` / `active` / `done` / `completed`
 / `failed`) and its pill styles are defined up front in
 [`frontend/src/keptBboxes/progress.ts`](frontend/src/keptBboxes/progress.ts),
 so the forthcoming analysis runner can flip pills without touching
@@ -290,7 +321,9 @@ Scope decisions, all reversible without schema changes:
   one bbox at a time — the focus map's header form does exactly
   that. The single cached row per bbox is overwritten when the
   radius changes (latest-wins), and `payload.radius_m` always
-  echoes the value the row was computed at.
+  echoes the value the row was computed at. Add `?refresh=true` to
+  force a new Overpass fetch at the same radius (for example after
+  OSM edits); the focus map header exposes this next to **Apply**.
 
 The endpoint returns:
 
@@ -333,6 +366,14 @@ populated by pure URL builders in
 [`mapLinks.ts`](frontend/src/keptBboxes/mapLinks.ts). Every entry is
 shown unconditionally — the user knows their cell better than we do —
 but two things deserve flagging because they're easy to get wrong:
+
+## Measurement tool (PR13+)
+
+"Measure" / "Done" in the focus map header opens or dismisses the floating panel. Persisted polylines load from Postgres (`poi_focus_measurements`); click a grey line to select it (orange draft overlay while editing). With the panel open, map clicks append vertices when you are drawing a new line or editing a saved one. Live length (m) and walking time use helpers in [`measure.ts`](frontend/src/keptBboxes/measure.ts) (parametric tests). On **Save**, the client infers `start_origin` (`poi_focus_centroid` vs `osm_entrance`) and `start_osm_node_id` from the first vertex via [`measurementStart.ts`](frontend/src/keptBboxes/measurementStart.ts) so exports can split centroid-anchored vs entrance-anchored lines. The panel offers **Save** (POST or PATCH), **Delete** (DELETE, persisted rows only), **Cancel** when there are unsaved edits (revert and close), and **Close** when there are none.
+
+GeoJSON for saved lines lives in [`focusMeasurementGeoJson.ts`](frontend/src/keptBboxes/focusMeasurementGeoJson.ts); state mutations go through [`usePoiFocusMeasurements.ts`](frontend/src/keptBboxes/usePoiFocusMeasurements.ts).
+
+See `PoiFocusMap.tsx` for integration and `index.css` for the panel (z-index 6).
 
 **1. China datum offset.** Chinese law requires consumer maps to
 publish on **GCJ-02** ("Mars datum"), a non-linear ~50–700 m offset

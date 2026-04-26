@@ -20,6 +20,7 @@ function renderPanel(overrides: Partial<SamplingPanelProps> = {}) {
         onStrategyChange: noop,
         onDecide: noop,
         onSkip: noop,
+        onOpenCustomCentroid: noop,
         ...overrides,
     };
     return render(<SamplingPanel {...props} />);
@@ -69,6 +70,13 @@ describe('<SamplingPanel />', () => {
         renderPanel({ onSkip });
         fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
         expect(onSkip).toHaveBeenCalledOnce();
+    });
+
+    it('fires onOpenCustomCentroid when Custom location is clicked', () => {
+        const onOpenCustomCentroid = vi.fn();
+        renderPanel({ onOpenCustomCentroid });
+        fireEvent.click(screen.getByRole('button', { name: /Custom location/ }));
+        expect(onOpenCustomCentroid).toHaveBeenCalledOnce();
     });
 
     it('fires onStrategyChange when a new strategy is picked', () => {

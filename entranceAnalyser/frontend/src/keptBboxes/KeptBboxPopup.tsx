@@ -17,49 +17,88 @@ export interface KeptBboxPopupProps {
     /** `undefined` when no pick yet, `null` when picked-but-empty,
      *  otherwise the picked POI. */
     pickedPoi: Poi | null | undefined;
+    /** Reviewer flag from `PATCH /poi_pick` (green overview marker). */
+    pickCompleted: boolean;
     /** True while this bbox's pick is in flight. */
     isPicking: boolean;
+    /** True while PATCH completed is in flight. */
+    isSavingPickCompleted?: boolean;
     onPick: (bboxId: string) => void;
+    /** Toggle completed; omitted in surfaces that don't persist it. */
+    onSetPickCompleted?: (bboxId: string, completed: boolean) => void;
     /** Optional: opens the POI focus map for this bbox. Forwarded to
      *  `<PoiPickPanel />` so the focus button only renders once a
      *  real POI has been picked. */
     onOpenFocus?: (bboxId: string) => void;
     /** True while the focus load for this bbox is in flight. */
     isOpeningFocus?: boolean;
+    /** Remove this bbox from `kept_bboxes` (parent runs confirm + `DELETE`). */
+    onRemoveFromKept?: (bboxId: string) => void;
+    /** True while DELETE is in flight for this bbox. */
+    isRemovingKept?: boolean;
 }
 
 /** Map the (pickedPoi, isPicking) pair to the existing `ProgressStatus`
  *  union so we reuse the `<StatusPill />` palette without new states.
  *  `pickedPoi === null` (queried but Overpass empty) still counts as
- *  done because the analysis ran and produced a definite answer. */
+ *  done because the analysis ran and produced a definite answer.
+ *  A real POI with `pickCompleted` maps to `completed`. */
 function progressFromPick(
     pickedPoi: Poi | null | undefined,
     isPicking: boolean,
+    pickCompleted: boolean,
 ): ProgressStatus {
     if (isPicking) return 'running';
-    if (pickedPoi !== undefined) return 'done';
+    if (pickedPoi !== undefined) {
+        if (pickedPoi === null) return 'done';
+        if (pickCompleted) return 'completed';
+        return 'active';
+    }
     return 'not_started';
 }
 
 export function KeptBboxPopup({
     bbox,
     pickedPoi,
+    pickCompleted,
     isPicking,
+    isSavingPickCompleted = false,
     onPick,
+    onSetPickCompleted,
     onOpenFocus,
     isOpeningFocus = false,
+    onRemoveFromKept,
+    isRemovingKept = false,
 }: KeptBboxPopupProps) {
     return (
         <div className="kept-bbox-popup">
-            <KeptBboxRow bbox={bbox} status={progressFromPick(pickedPoi, isPicking)} />
+            <KeptBboxRow
+                bbox={bbox}
+                status={progressFromPick(pickedPoi, isPicking, pickCompleted)}
+            />
             <PoiPickPanel
                 bboxId={bbox.id}
                 pickedPoi={pickedPoi}
+                pickCompleted={pickCompleted}
                 isPicking={isPicking}
+                isSavingPickCompleted={isSavingPickCompleted}
                 onPick={onPick}
+                onSetPickCompleted={onSetPickCompleted}
                 onOpenFocus={onOpenFocus}
                 isOpeningFocus={isOpeningFocus}
             />
+            {onRemoveFromKept && (
+                <div className="kept-bbox-popup__actions">
+                    <button
+                        type="button"
+                        className="kept-bbox-popup__reject"
+                        disabled={isRemovingKept}
+                        onClick={() => void onRemoveFromKept(bbox.id)}
+                    >
+                        Remove from kept…
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

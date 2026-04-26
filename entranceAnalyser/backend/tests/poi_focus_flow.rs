@@ -145,19 +145,28 @@ async fn pick_poi(app: &axum::Router, bbox_id: Uuid) -> JsonValue {
 /// the server's `POI_FOCUS_RADIUS_M` (mirrored as
 /// [`TEST_FOCUS_RADIUS_M`] in this suite).
 async fn focus_poi(app: &axum::Router, bbox_id: Uuid) -> (StatusCode, JsonValue) {
-    focus_poi_with_radius(app, bbox_id, None).await
+    focus_poi_with_radius(app, bbox_id, None, false).await
 }
 
-/// Variant with an optional `?radius_m=` override, used by the
-/// per-request-radius tests.
+/// Variant with an optional `?radius_m=` override and `?refresh=true`,
+/// used by the per-request-radius tests.
 async fn focus_poi_with_radius(
     app: &axum::Router,
     bbox_id: Uuid,
     radius_m: Option<u32>,
+    refresh: bool,
 ) -> (StatusCode, JsonValue) {
-    let mut uri = format!("/api/bbox/kept/{bbox_id}/poi_focus");
+    let mut qs: Vec<String> = Vec::new();
     if let Some(r) = radius_m {
-        uri.push_str(&format!("?radius_m={r}"));
+        qs.push(format!("radius_m={r}"));
+    }
+    if refresh {
+        qs.push("refresh=true".into());
+    }
+    let mut uri = format!("/api/bbox/kept/{bbox_id}/poi_focus");
+    if !qs.is_empty() {
+        uri.push('?');
+        uri.push_str(&qs.join("&"));
     }
     let resp = app
         .clone()
@@ -272,6 +281,61 @@ async fn first_focus_caches_then_subsequent_calls_short_circuit() {
     let (status2, body2) = focus_poi(&app, bbox_id).await;
     assert_eq!(status2, StatusCode::OK);
     assert_eq!(body2["result"]["buildings"]["features"][0]["id"], "way/500");
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn same_radius_with_refresh_true_refetches_overpass() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let overpass = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(overpass_body(json!([shop_pick_element()]))),
+        )
+        .up_to_n_times(1)
+        .mount(&overpass)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(overpass_body(json!([
+                {
+                    "type": "way", "id": 500,
+                    "geometry": [
+                        {"lat": 45.510, "lon": -73.510},
+                        {"lat": 45.510, "lon": -73.509},
+                        {"lat": 45.511, "lon": -73.509},
+                        {"lat": 45.510, "lon": -73.510}
+                    ],
+                    "tags": {"building": "yes"}
+                },
+                {
+                    "type": "node", "id": 600,
+                    "lat": 45.5105, "lon": -73.5095,
+                    "tags": {"entrance": "main"}
+                }
+            ]))),
+        )
+        .expect(2)
+        .mount(&overpass)
+        .await;
+
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let bbox_id = keep_one_bbox(&app).await;
+    pick_poi(&app, bbox_id).await;
+
+    let (s1, _) = focus_poi(&app, bbox_id).await;
+    assert_eq!(s1, StatusCode::OK);
+    let (s2, _) = focus_poi_with_radius(&app, bbox_id, None, true).await;
+    assert_eq!(s2, StatusCode::OK);
 
     db.cleanup().await.ok();
 }
@@ -560,7 +624,7 @@ async fn radius_query_param_is_validated(
     let bbox_id = keep_one_bbox(&app).await;
     pick_poi(&app, bbox_id).await;
 
-    let (status, _) = focus_poi_with_radius(&app, bbox_id, radius_m).await;
+    let (status, _) = focus_poi_with_radius(&app, bbox_id, radius_m, false).await;
     assert_eq!(status, expected, "radius_m={radius_m:?}");
 
     db.cleanup().await.ok();
@@ -602,20 +666,20 @@ async fn changing_radius_re_fetches_overpass_and_overwrites_cache() {
     let bbox_id = keep_one_bbox(&app).await;
     pick_poi(&app, bbox_id).await;
 
-    let (s1, b1) = focus_poi_with_radius(&app, bbox_id, Some(200)).await;
+    let (s1, b1) = focus_poi_with_radius(&app, bbox_id, Some(200), false).await;
     assert_eq!(s1, StatusCode::OK);
     assert_eq!(b1["result"]["radius_m"], 200);
 
     // Same radius → cache hit, no extra Overpass call.
-    let (s1b, b1b) = focus_poi_with_radius(&app, bbox_id, Some(200)).await;
+    let (s1b, b1b) = focus_poi_with_radius(&app, bbox_id, Some(200), false).await;
     assert_eq!(s1b, StatusCode::OK);
     assert_eq!(b1b["result"]["radius_m"], 200);
 
-    let (s2, b2) = focus_poi_with_radius(&app, bbox_id, Some(400)).await;
+    let (s2, b2) = focus_poi_with_radius(&app, bbox_id, Some(400), false).await;
     assert_eq!(s2, StatusCode::OK);
     assert_eq!(b2["result"]["radius_m"], 400);
 
-    let (s3, b3) = focus_poi_with_radius(&app, bbox_id, Some(200)).await;
+    let (s3, b3) = focus_poi_with_radius(&app, bbox_id, Some(200), false).await;
     assert_eq!(s3, StatusCode::OK);
     assert_eq!(b3["result"]["radius_m"], 200);
 

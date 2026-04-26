@@ -8,6 +8,7 @@ pub mod api;
 pub mod bbox;
 pub mod config;
 pub mod db;
+pub mod focus_measurements;
 pub mod geotiff_pop;
 pub mod lzw_transcode;
 pub mod mollweide;

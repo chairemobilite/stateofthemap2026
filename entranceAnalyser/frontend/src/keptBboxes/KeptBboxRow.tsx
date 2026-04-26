@@ -22,6 +22,7 @@ export interface KeptBboxRowProps {
  */
 export function KeptBboxRow({ bbox, status }: KeptBboxRowProps) {
     const [lon, lat] = bbox.center;
+    const source = bbox.candidate_source ?? 'random';
     return (
         <article className="kept-bbox-row" aria-label={`Bbox ${bbox.id}`}>
             <header className="kept-bbox-row__header">
@@ -49,6 +50,18 @@ export function KeptBboxRow({ bbox, status }: KeptBboxRowProps) {
                 <dd>{PERCENT.format(bbox.max_built_volume_ratio)}</dd>
                 <dt>Kept</dt>
                 <dd>{formatKeptDate(bbox.kept_at)}</dd>
+                {source === 'custom_centroid' && (
+                    <>
+                        <dt>Cell origin</dt>
+                        <dd>Custom lat/lon</dd>
+                    </>
+                )}
+                {source === 'custom_osm' && (
+                    <>
+                        <dt>Cell origin</dt>
+                        <dd>OSM anchor</dd>
+                    </>
+                )}
             </dl>
         </article>
     );

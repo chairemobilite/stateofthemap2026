@@ -16,6 +16,8 @@ export interface SamplingPanelProps {
     onStrategyChange: (next: Strategy) => void;
     onDecide: (decision: Decision) => void;
     onSkip: () => void;
+    /** Opens the custom lat/lon centroid dialog. */
+    onOpenCustomCentroid: () => void;
 }
 
 /** Format a signed degree value with N/S or E/W suffix. */
@@ -44,11 +46,18 @@ export function SamplingPanel({
     onStrategyChange,
     onDecide,
     onSkip,
+    onOpenCustomCentroid,
 }: SamplingPanelProps) {
     const busy = status === 'loading';
     return (
         <aside className="sampling-panel" aria-label="Bbox sampling">
             <StrategySelector strategy={strategy} onChange={onStrategyChange} disabled={busy} />
+
+            <div className="sampling-panel__custom">
+                <button type="button" onClick={onOpenCustomCentroid} disabled={busy}>
+                    Custom location…
+                </button>
+            </div>
 
             <h2>Candidate bbox</h2>
             {bbox ? (

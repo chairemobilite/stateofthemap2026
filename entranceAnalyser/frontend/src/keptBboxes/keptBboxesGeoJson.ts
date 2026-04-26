@@ -6,7 +6,7 @@
 import type { FeatureCollection, Point, Polygon } from 'geojson';
 import type { LngLatBoundsLike } from 'maplibre-gl';
 
-import type { KeptBbox, Poi } from '../api';
+import type { KeptBbox, PoiPickEntry } from '../api';
 import { toPolygon } from '../bboxGeoJson';
 
 /**
@@ -40,17 +40,16 @@ export function toCenterCollection(keptBboxes: KeptBbox[]): FeatureCollection<Po
 
 /**
  * Build a `FeatureCollection` of picked POI centers, one per non-null
- * entry in `picks`. Skips bboxes with `null` (queried but empty) and
- * `undefined` (not picked yet) so the marker layer paints only real
- * features. `properties.bbox_id` lets click handlers look up the host
- * bbox if we ever want to re-open its popup from a marker click.
+ * entry in `picks`. Skips bboxes with `null` poi (queried but empty) and
+ * missing keys (no row yet) so the marker layer paints only real
+ * features. `properties.completed` drives orange vs green on the map.
+ * `properties.bbox_id` lets click handlers look up the host bbox.
  */
-export function toPoiCollection(
-    picks: Record<string, Poi | null>,
-): FeatureCollection<Point> {
+export function toPoiCollection(picks: Record<string, PoiPickEntry>): FeatureCollection<Point> {
     const features: FeatureCollection<Point>['features'] = [];
-    for (const [bboxId, poi] of Object.entries(picks)) {
-        if (!poi) continue;
+    for (const [bboxId, entry] of Object.entries(picks)) {
+        if (!entry.poi) continue;
+        const poi = entry.poi;
         features.push({
             type: 'Feature',
             properties: {
@@ -58,6 +57,7 @@ export function toPoiCollection(
                 osm_type: poi.osm_type,
                 osm_id: poi.osm_id,
                 group: poi.group,
+                completed: entry.completed,
             },
             geometry: { type: 'Point', coordinates: poi.center },
         });

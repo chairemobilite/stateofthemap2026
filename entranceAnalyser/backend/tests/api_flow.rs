@@ -7,6 +7,7 @@
 //! 3. `POST /api/bbox/decision` with `keep` → row lands in `kept_bboxes`.
 //! 4. `GET /api/bbox/kept` → returns the bbox we just kept.
 //! 5. `POST /api/bbox/decision` with `reject` → count unchanged.
+//! 6. `DELETE /api/bbox/kept/:id` → removes a kept row (see `delete_kept_flow`).
 
 mod common;
 
@@ -14,7 +15,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use entrance_analyser_backend::{
     api::{self, AppConfig, AppState},
-    bbox::{Bbox, KeptBbox},
+    bbox::{Bbox, CandidateSource, KeptBbox},
     overpass::OverpassClient,
     poi_config::PoiTagConfig,
     sampler::Sampler,
@@ -24,6 +25,8 @@ use http_body_util::BodyExt;
 use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Stub config + Overpass client for tests that don't exercise the
 /// POI-pick flow. `UNREACHABLE_OVERPASS_URL` deliberately points at a
@@ -79,13 +82,17 @@ fn stub_app_config() -> AppConfig {
 }
 
 async fn build_router(pool: sqlx::PgPool) -> axum::Router {
+    build_router_overpass(pool, UNREACHABLE_OVERPASS_URL).await
+}
+
+async fn build_router_overpass(pool: sqlx::PgPool, overpass_url: impl Into<String>) -> axum::Router {
     let sampler = Sampler::from_latest(pool.clone()).await.unwrap();
     assert!(sampler.is_some(), "seed must populate grid_meta");
     let state = AppState::new(
         PgStore::new(pool),
         sampler,
         stub_poi_config(),
-        OverpassClient::new(UNREACHABLE_OVERPASS_URL),
+        OverpassClient::new(overpass_url.into()),
         stub_app_config(),
     );
     api::router(state)
@@ -122,6 +129,7 @@ async fn random_keep_reject_flow() {
     assert_eq!(resp.status(), StatusCode::OK);
     let bbox: Bbox = json_body(resp).await;
     assert_eq!(bbox.cell_size_km, 10);
+    assert_eq!(bbox.candidate_source, CandidateSource::Random);
     assert_eq!(bbox.population, 1000.0);
     assert!((bbox.density_per_km2 - 10.0).abs() < 1e-9);
     assert!((bbox.max_density_ratio - 1.0).abs() < 1e-9);
@@ -185,6 +193,88 @@ async fn random_keep_reject_flow() {
     assert_eq!(resp.status(), StatusCode::OK);
     let reply: serde_json::Value = json_body(resp).await;
     assert_eq!(reply["total_kept"], 1);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn delete_kept_flow() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    seed_single_cell(&db.pool, true).await;
+    let app = build_router(db.pool.clone()).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/bbox/random")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bbox: Bbox = json_body(resp).await;
+
+    let keep_body = serde_json::to_vec(&json!({
+        "bbox": bbox,
+        "decision": "keep",
+    }))
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/bbox/decision")
+                .header("content-type", "application/json")
+                .body(Body::from(keep_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!("/api/bbox/kept/{}", bbox.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/bbox/kept")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let kept: serde_json::Value = json_body(resp).await;
+    assert_eq!(kept["kept"].as_array().unwrap().len(), 0);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!("/api/bbox/kept/{}", bbox.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     db.cleanup().await.ok();
 }
@@ -347,6 +437,209 @@ async fn config_endpoint_echoes_runtime_overrides() {
         "https://example.org/edit?lat={lat}&lon={lon}&z={zoom}"
     );
     assert_eq!(body["poi_focus_radius_m"], 250);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn custom_centroid_bbox_center_matches_body() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    seed_single_cell(&db.pool, true).await;
+    let app = build_router(db.pool.clone()).await;
+
+    let body = json!({ "lat": 45.5012, "lon": -73.5012 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/bbox/custom_centroid")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bbox: Bbox = json_body(resp).await;
+    assert!((bbox.center[0] - -73.5012).abs() < 1e-9);
+    assert!((bbox.center[1] - 45.5012).abs() < 1e-9);
+    assert_eq!(bbox.cell_size_km, 10);
+    assert_eq!(bbox.candidate_source, CandidateSource::CustomCentroid);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn custom_centroid_keep_persists_candidate_source() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    seed_single_cell(&db.pool, true).await;
+    let app = build_router(db.pool.clone()).await;
+
+    let body = json!({ "lat": 45.5012, "lon": -73.5012 });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/bbox/custom_centroid")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bbox: Bbox = json_body(resp).await;
+    assert_eq!(bbox.candidate_source, CandidateSource::CustomCentroid);
+
+    let keep_body = serde_json::to_vec(&json!({ "bbox": bbox, "decision": "keep" })).unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/bbox/decision")
+                .header("content-type", "application/json")
+                .body(Body::from(keep_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder().uri("/api/bbox/kept").body(Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let kept: serde_json::Value = json_body(resp).await;
+    let row: KeptBbox = serde_json::from_value(kept["kept"][0].clone()).unwrap();
+    assert_eq!(row.bbox.candidate_source, CandidateSource::CustomCentroid);
+
+    // Keeping a custom-centroid cell seeds the POI pick at the same centre (no random draw).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/analyses/poi_picks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let picks: serde_json::Value = json_body(resp).await;
+    let arr = picks["picks"].as_array().expect("picks array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["bbox_id"], bbox.id.to_string());
+    assert_eq!(arr[0]["poi"]["group"], "custom_centroid");
+    assert_eq!(arr[0]["poi"]["osm_id"], 0);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn custom_osm_bbox_resolves_node_center_and_keeps_ref() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    seed_single_cell(&db.pool, true).await;
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/interpreter"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "elements": [{
+                "type": "node",
+                "id": 42,
+                "lat": 45.501,
+                "lon": -73.501,
+                "tags": {}
+            }]
+        })))
+        .mount(&mock)
+        .await;
+    let app = build_router_overpass(db.pool.clone(), format!("{}/api/interpreter", mock.uri())).await;
+
+    let body = json!({ "osm_ref": "node/42" });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/bbox/custom_osm")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bbox: Bbox = json_body(resp).await;
+    assert_eq!(bbox.candidate_source, CandidateSource::CustomOsm);
+    assert_eq!(bbox.custom_osm_type.as_deref(), Some("node"));
+    assert_eq!(bbox.custom_osm_id, Some(42));
+    assert!((bbox.center[1] - 45.501).abs() < 1e-6);
+    assert!((bbox.center[0] - -73.501).abs() < 1e-6);
+
+    let keep_body = serde_json::to_vec(&json!({ "bbox": bbox, "decision": "keep" })).unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/bbox/decision")
+                .header("content-type", "application/json")
+                .body(Body::from(keep_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/analyses/poi_picks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let picks: serde_json::Value = json_body(resp).await;
+    let arr = picks["picks"].as_array().unwrap();
+    assert_eq!(arr[0]["poi"]["group"], "custom_osm");
+    assert_eq!(arr[0]["poi"]["osm_id"], 42);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn custom_centroid_rejects_lat_out_of_range() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    seed_single_cell(&db.pool, true).await;
+    let app = build_router(db.pool.clone()).await;
+
+    let body = json!({ "lat": 90.1, "lon": 0.0 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/bbox/custom_centroid")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     db.cleanup().await.ok();
 }

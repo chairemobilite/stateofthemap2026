@@ -1,5 +1,5 @@
-//! End-to-end coverage for `POST /api/bbox/kept/:id/poi_pick` and
-//! `GET /api/analyses/poi_picks`.
+//! End-to-end coverage for `POST /api/bbox/kept/:id/poi_pick`,
+//! `PATCH /api/bbox/kept/:id/poi_pick`, and `GET /api/analyses/poi_picks`.
 //!
 //! Each test stands up:
 //! 1. A real Postgres database (skipped when `DATABASE_URL` is unset).
@@ -153,6 +153,27 @@ async fn pick_poi(app: &axum::Router, bbox_id: Uuid) -> (StatusCode, JsonValue) 
     (status, body)
 }
 
+async fn patch_poi_pick(app: &axum::Router, bbox_id: Uuid, completed: bool) -> (StatusCode, JsonValue) {
+    let payload = serde_json::to_vec(&json!({ "completed": completed })).unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri(format!("/api/bbox/kept/{bbox_id}/poi_pick"))
+                .header("content-type", "application/json")
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: JsonValue =
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| json!(String::from_utf8_lossy(&bytes)));
+    (status, body)
+}
+
 /// Wiremock body shape: a top-level `elements` array whose entries
 /// look the same as a real Overpass `out center tags` response.
 fn overpass_body(elements: serde_json::Value) -> serde_json::Value {
@@ -206,11 +227,93 @@ async fn first_pick_caches_then_subsequent_calls_short_circuit() {
         matches!(picked_group, "shops" | "amenities"),
         "picked group {picked_group:?} must match the YAML",
     );
+    assert_eq!(body["completed"].as_bool(), Some(false));
 
     // Re-pick: same response, no extra Overpass call (Mock::expect(1)).
     let (status2, body2) = pick_poi(&app, bbox_id).await;
     assert_eq!(status2, StatusCode::OK);
     assert_eq!(body2["poi"]["osm_id"].as_i64().unwrap(), picked_id);
+    assert_eq!(body2["completed"].as_bool(), Some(false));
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn patch_poi_pick_toggles_completed_and_poi_picks_echoes_it() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let overpass = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(overpass_body(json!([
+            {"type": "node", "id": 7, "lat": 45.5, "lon": -73.5, "tags": {"shop": "bakery"}},
+        ]))))
+        .mount(&overpass)
+        .await;
+
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let (bbox_id, _) = keep_one_bbox(&app).await;
+    let (st, _) = pick_poi(&app, bbox_id).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (st, body) = patch_poi_pick(&app, bbox_id, true).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["completed"].as_bool(), Some(true));
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/analyses/poi_picks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list: JsonValue = json_body(resp).await;
+    let row = list["picks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["bbox_id"].as_str() == Some(&bbox_id.to_string()))
+        .unwrap();
+    assert_eq!(row["completed"].as_bool(), Some(true));
+
+    let (st2, body2) = patch_poi_pick(&app, bbox_id, false).await;
+    assert_eq!(st2, StatusCode::OK);
+    assert_eq!(body2["completed"].as_bool(), Some(false));
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn patch_completed_true_on_null_pick_returns_422() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let overpass = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(overpass_body(json!([]))))
+        .mount(&overpass)
+        .await;
+
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let (bbox_id, _) = keep_one_bbox(&app).await;
+    pick_poi(&app, bbox_id).await;
+
+    let (st, _) = patch_poi_pick(&app, bbox_id, true).await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
 
     db.cleanup().await.ok();
 }

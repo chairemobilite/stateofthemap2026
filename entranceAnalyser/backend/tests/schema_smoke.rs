@@ -15,6 +15,7 @@ use sqlx::Row;
 #[case("grid_cells")]
 #[case("kept_bboxes")]
 #[case("analyses")]
+#[case("poi_focus_measurements")]
 #[tokio::test]
 async fn migration_creates_table(#[case] table: &str) {
     let Some(db) = common::pg_or_skip().await else {

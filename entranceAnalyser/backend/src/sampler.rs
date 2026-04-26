@@ -90,6 +90,8 @@ pub enum SampleError {
     /// but the current grid only carries population data. The HTTP
     /// handler turns this into a 503 with a clear rebuild hint.
     BuiltUnavailable,
+    /// `grid_cells` has no rows for the active `(cell_size_km, epoch)`.
+    EmptyGrid,
     /// Transport / planner error from sqlx.
     Db(sqlx::Error),
 }
@@ -106,6 +108,7 @@ impl std::fmt::Display for SampleError {
             SampleError::BuiltUnavailable => f.write_str(
                 "strategy needs built-volume data; rerun build-grid with --built-volume",
             ),
+            SampleError::EmptyGrid => f.write_str("no grid_cells rows for the active grid build"),
             SampleError::Db(e) => write!(f, "database error: {e}"),
         }
     }
@@ -185,6 +188,35 @@ impl Sampler {
     /// `grid_cells`, ~100-200 ms at our scale (~800k inhabited 10 km
     /// cells). Acceptable for a single-operator workflow; swap to a
     /// cumulative-sum + indexed lookup if we ever run batched draws.
+    /// Population and built-volume stats from the **nearest** `grid_cells`
+    /// row (by geography distance to cell centre), but [`SampledCell::lat`]
+    /// / [`SampledCell::lon`] are set to the caller’s point so
+    /// [`crate::bbox::bbox_from_cell`] centres the bbox there.
+    pub async fn sampled_cell_at_centroid(&self, lon: f64, lat: f64) -> Result<SampledCell, SampleError> {
+        let row: Option<(f32, f32, f32, f32)> = sqlx::query_as(
+            "SELECT lat, lon, pop, built_volume FROM grid_cells \
+             WHERE cell_size_km = $1 AND epoch = $2 \
+             ORDER BY ST_Distance(
+               geom::geography,
+               ST_SetSRID(ST_MakePoint($3::float8, $4::float8), 4326)::geography
+             ) ASC \
+             LIMIT 1",
+        )
+        .bind(self.cell_size_km as i32)
+        .bind(self.epoch)
+        .bind(lon)
+        .bind(lat)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(SampleError::Db)?;
+
+        let Some((_grid_lat, _grid_lon, pop, built_volume)) = row else {
+            return Err(SampleError::EmptyGrid);
+        };
+
+        Ok(self.decorate(lat, lon, pop as f64, built_volume as f64))
+    }
+
     pub async fn sample(&self, strategy: Strategy) -> Result<SampledCell, SampleError> {
         if strategy.needs_built() && !self.has_built_data() {
             return Err(SampleError::BuiltUnavailable);

@@ -3,9 +3,12 @@
 
 mod common;
 
-use entrance_analyser_backend::bbox::Bbox;
+use entrance_analyser_backend::bbox::{Bbox, CandidateSource};
 use entrance_analyser_backend::poi_focus::{
     Feature, FeatureCollection, FeatureCollectionType, FeatureType, Geometry, PoiFocusResult,
+};
+use entrance_analyser_backend::focus_measurements::{
+    path_length_m_haversine, EntranceKind, MeasurementPurpose, MeasurementStartOrigin,
 };
 use entrance_analyser_backend::storage::PgStore;
 use serde_json::json;
@@ -27,6 +30,9 @@ fn sample_bbox(center: [f64; 2]) -> Bbox {
         max_density_ratio: 0.25,
         built_volume: 750_000.0,
         max_built_volume_ratio: 0.3,
+        candidate_source: CandidateSource::Random,
+        custom_osm_type: None,
+        custom_osm_id: None,
     }
 }
 
@@ -47,6 +53,21 @@ async fn append_then_load_roundtrip() {
     // Load order is insertion order (kept_at ASC, id ASC).
     assert_eq!(kept[0].bbox, a);
     assert_eq!(kept[1].bbox, b);
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn append_round_trips_custom_candidate_source() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let store = PgStore::new(db.pool.clone());
+    let mut b = sample_bbox([-10.0, 20.0]);
+    b.candidate_source = CandidateSource::CustomCentroid;
+    store.append(b.clone()).await.unwrap();
+    let kept = store.load().await.unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].bbox.candidate_source, CandidateSource::CustomCentroid);
     db.cleanup().await.ok();
 }
 
@@ -196,6 +217,81 @@ async fn poi_focus_round_trips_through_analyses() {
         .await
         .unwrap()
         .is_none());
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn poi_focus_measurements_crud_round_trip() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let store = PgStore::new(db.pool.clone());
+    let bbox = sample_bbox([0.0, 0.0]);
+    let id = bbox.id;
+    store.append(bbox).await.unwrap();
+
+    let coords: [[f64; 2]; 2] = [[0.0, 0.0], [0.001, 0.0]];
+    let length_m = path_length_m_haversine(&coords).unwrap();
+    let m = store
+        .insert_poi_focus_measurement(
+            id,
+            &coords,
+            5.0,
+            length_m,
+            MeasurementPurpose::ToNearestWalkingNetwork,
+            EntranceKind::Main,
+            MeasurementStartOrigin::PoiFocusCentroid,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(m.bbox_id, id);
+    assert_eq!(m.coordinates.len(), 2);
+    assert_eq!(
+        m.measurement_type,
+        MeasurementPurpose::ToNearestWalkingNetwork
+    );
+    assert_eq!(m.entrance_type, EntranceKind::Main);
+    assert_eq!(m.start_origin, MeasurementStartOrigin::PoiFocusCentroid);
+    assert!(m.start_osm_node_id.is_none());
+
+    let list = store.list_poi_focus_measurements(id).await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, m.id);
+
+    let coords2 = vec![[0.0_f64, 0.0_f64], [0.002, 0.0_f64]];
+    let len2 = path_length_m_haversine(&coords2).unwrap();
+    let updated = store
+        .update_poi_focus_measurement(
+            id,
+            m.id,
+            &coords2,
+            4.0,
+            len2,
+            MeasurementPurpose::ToNearestMainEntrance,
+            EntranceKind::CentroidMainBuilding,
+            MeasurementStartOrigin::OsmEntrance,
+            Some(99_001),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.length_m, len2);
+    assert_eq!(
+        updated.measurement_type,
+        MeasurementPurpose::ToNearestMainEntrance
+    );
+    assert_eq!(updated.entrance_type, EntranceKind::CentroidMainBuilding);
+    assert_eq!(updated.start_origin, MeasurementStartOrigin::OsmEntrance);
+    assert_eq!(updated.start_osm_node_id, Some(99_001));
+
+    assert!(store.delete_poi_focus_measurement(id, m.id).await.unwrap());
+    assert!(!store
+        .delete_poi_focus_measurement(id, m.id)
+        .await
+        .unwrap());
+    assert!(store.list_poi_focus_measurements(id).await.unwrap().is_empty());
 
     db.cleanup().await.ok();
 }

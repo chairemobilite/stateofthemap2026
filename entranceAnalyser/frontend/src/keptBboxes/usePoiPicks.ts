@@ -11,7 +11,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchPoiPicks, pickPoi, type Poi, type PoiPickRecord } from '../api';
+import {
+    fetchPoiPicks,
+    patchPoiPickCompleted,
+    pickPoi,
+    type PoiPickEntry,
+    type PoiPickRecord,
+} from '../api';
 
 /** Same lifecycle as `useKeptBboxes` for visual consistency. */
 export type PoiPicksStatus = 'loading' | 'idle' | 'error';
@@ -21,19 +27,31 @@ export interface UsePoiPicksOptions {
     fetchAll?: () => Promise<PoiPickRecord[]>;
     /** Override for the per-bbox pick action, mostly for tests. */
     pickOne?: (bboxId: string) => Promise<PoiPickRecord>;
+    /** Override for PATCH completed, mostly for tests. */
+    patchCompleted?: (bboxId: string, completed: boolean) => Promise<PoiPickRecord>;
+}
+
+function recordToEntry(row: PoiPickRecord): PoiPickEntry {
+    return { poi: row.poi, completed: row.completed ?? false };
 }
 
 export interface PoiPicksState {
-    /** `picks[bboxId]` is `undefined` when no pick has been requested
-     *  yet, `null` when Overpass matched nothing, otherwise the POI. */
-    picks: Record<string, Poi | null>;
+    /** `picks[bboxId]` is missing when no pick row exists; `poi` is
+     *  `null` when Overpass matched nothing inside the cell. */
+    picks: Record<string, PoiPickEntry>;
     /** Bbox ids whose `pick(...)` is currently in flight, so the UI
      *  can disable the corresponding button without blocking anything
      *  else on the page. */
     picking: Set<string>;
+    /** Bbox ids whose completed flag PATCH is in flight. */
+    savingCompleted: Set<string>;
     status: PoiPicksStatus;
     error: string | null;
     pick: (bboxId: string) => Promise<void>;
+    /** Persist reviewer "completed" (overview map green dot). */
+    setPickCompleted: (bboxId: string, completed: boolean) => Promise<void>;
+    /** Drop local pick state after the bbox was removed from `kept_bboxes`. */
+    removePickForBbox: (bboxId: string) => void;
     reload: () => Promise<void>;
 }
 
@@ -53,9 +71,17 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
         () => options.pickOne ?? ((bboxId: string) => pickPoi(bboxId)),
         [options.pickOne],
     );
+    const patchOne = useMemo(
+        () =>
+            options.patchCompleted ??
+            ((bboxId: string, completed: boolean) =>
+                patchPoiPickCompleted(bboxId, completed)),
+        [options.patchCompleted],
+    );
 
-    const [picks, setPicks] = useState<Record<string, Poi | null>>({});
+    const [picks, setPicks] = useState<Record<string, PoiPickEntry>>({});
     const [picking, setPicking] = useState<Set<string>>(() => new Set());
+    const [savingCompleted, setSavingCompleted] = useState<Set<string>>(() => new Set());
     const [status, setStatus] = useState<PoiPicksStatus>('loading');
     const [error, setError] = useState<string | null>(null);
     // StrictMode double-invokes effects in dev; guard the bootstrap so
@@ -67,8 +93,8 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
         setError(null);
         try {
             const rows = await fetchAll();
-            const next: Record<string, Poi | null> = {};
-            for (const row of rows) next[row.bbox_id] = row.poi;
+            const next: Record<string, PoiPickEntry> = {};
+            for (const row of rows) next[row.bbox_id] = recordToEntry(row);
             setPicks(next);
             setStatus('idle');
         } catch (err) {
@@ -93,7 +119,7 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
             });
             try {
                 const row = await pickOne(bboxId);
-                setPicks((p) => ({ ...p, [row.bbox_id]: row.poi }));
+                setPicks((p) => ({ ...p, [row.bbox_id]: recordToEntry(row) }));
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
             } finally {
@@ -107,5 +133,47 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
         [pickOne],
     );
 
-    return { picks, picking, status, error, pick, reload };
+    const removePickForBbox = useCallback((bboxId: string) => {
+        setPicks((p) => {
+            const next = { ...p };
+            delete next[bboxId];
+            return next;
+        });
+    }, []);
+
+    const setPickCompleted = useCallback(
+        async (bboxId: string, completed: boolean) => {
+            setError(null);
+            setSavingCompleted((s) => {
+                const next = new Set(s);
+                next.add(bboxId);
+                return next;
+            });
+            try {
+                const row = await patchOne(bboxId, completed);
+                setPicks((p) => ({ ...p, [row.bbox_id]: recordToEntry(row) }));
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+            } finally {
+                setSavingCompleted((s) => {
+                    const next = new Set(s);
+                    next.delete(bboxId);
+                    return next;
+                });
+            }
+        },
+        [patchOne],
+    );
+
+    return {
+        picks,
+        picking,
+        savingCompleted,
+        status,
+        error,
+        pick,
+        setPickCompleted,
+        removePickForBbox,
+        reload,
+    };
 }

@@ -72,9 +72,22 @@ describe('usePoiFocus', () => {
 
             expect(result.current.loading.has(ID_A)).toBe(false);
             expect(result.current.focuses[ID_A]).toEqual(focus);
-            expect(loadOne).toHaveBeenCalledWith(ID_A, radiusArg);
+            expect(loadOne).toHaveBeenCalledWith(ID_A, radiusArg, undefined);
         },
     );
+
+    it('loadFocus forwards refresh to loadOne', async () => {
+        const fetchAll = vi.fn().mockResolvedValue([]);
+        const loadOne = vi.fn().mockResolvedValue({
+            bbox_id: ID_A,
+            result: makePoiFocus({ radius_m: 200 }),
+        });
+        const { result } = renderHook(() => usePoiFocus({ fetchAll, loadOne }));
+        await waitFor(() => expect(result.current.status).toBe('idle'));
+
+        await act(() => result.current.loadFocus(ID_A, 200, { refresh: true }));
+        expect(loadOne).toHaveBeenCalledWith(ID_A, 200, { refresh: true });
+    });
 
     it.each([
         ['409 Conflict (no pick)', '409 Conflict: no POI pick yet'],
@@ -109,5 +122,17 @@ describe('usePoiFocus', () => {
         await act(() => result.current.reload());
         expect(result.current.focuses[ID_A]?.radius_m).toBe(300);
         expect(fetchAll).toHaveBeenCalledTimes(2);
+    });
+
+    it('dropFocus removes one bbox from the in-memory map', async () => {
+        const fetchAll = vi.fn().mockResolvedValue([
+            { bbox_id: ID_A, result: makePoiFocus() },
+            { bbox_id: ID_B, result: makePoiFocus({ radius_m: 99 }) },
+        ]);
+        const { result } = renderHook(() => usePoiFocus({ fetchAll }));
+        await waitFor(() => expect(result.current.status).toBe('idle'));
+        act(() => result.current.dropFocus(ID_A));
+        expect(result.current.focuses[ID_A]).toBeUndefined();
+        expect(result.current.focuses[ID_B]).toBeDefined();
     });
 });

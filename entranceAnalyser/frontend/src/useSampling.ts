@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
     DEFAULT_STRATEGY,
+    fetchBboxAtCustomCentroid,
+    fetchBboxAtCustomOsm,
     fetchRandomBbox,
     submitDecision,
     type Bbox,
@@ -26,6 +28,10 @@ export interface SamplingState {
     setStrategy: (next: Strategy) => void;
     decide: (decision: Decision) => Promise<void>;
     skip: () => Promise<void>;
+    /** Load a bbox centred on the given coordinates (nearest cell for stats). */
+    applyCustomCentroid: (lat: number, lon: number) => Promise<boolean>;
+    /** Load a bbox centred on one OSM object's Overpass centre. */
+    applyCustomOsm: (osm_ref: string) => Promise<boolean>;
 }
 
 export interface UseSamplingOptions {
@@ -33,6 +39,10 @@ export interface UseSamplingOptions {
     initialStrategy?: Strategy;
     /** Override the API module, mostly for tests. */
     fetchNext?: (strategy: Strategy) => Promise<Bbox>;
+    /** Override `POST /api/bbox/custom_centroid` for tests. */
+    fetchCustomCentroid?: (lat: number, lon: number) => Promise<Bbox>;
+    /** Override `POST /api/bbox/custom_osm` for tests. */
+    fetchCustomOsm?: (osm_ref: string) => Promise<Bbox>;
     submit?: (bbox: Bbox, decision: Decision) => Promise<{ total_kept: number }>;
 }
 
@@ -50,6 +60,14 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
     const fetchNext = useMemo(
         () => options.fetchNext ?? ((s: Strategy) => fetchRandomBbox(s)),
         [options.fetchNext],
+    );
+    const fetchCustomCentroid = useMemo(
+        () => options.fetchCustomCentroid ?? ((lat: number, lon: number) => fetchBboxAtCustomCentroid(lat, lon)),
+        [options.fetchCustomCentroid],
+    );
+    const fetchCustomOsmFn = useMemo(
+        () => options.fetchCustomOsm ?? ((osm_ref: string) => fetchBboxAtCustomOsm(osm_ref)),
+        [options.fetchCustomOsm],
     );
     const submit = useMemo(
         () =>
@@ -113,6 +131,40 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
         [loadNext],
     );
 
+    const applyCustomCentroid = useCallback(
+        async (lat: number, lon: number) => {
+            setStatus('loading');
+            setError(null);
+            try {
+                setBbox(await fetchCustomCentroid(lat, lon));
+                setStatus('idle');
+                return true;
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+                setStatus('error');
+                return false;
+            }
+        },
+        [fetchCustomCentroid],
+    );
+
+    const applyCustomOsm = useCallback(
+        async (osm_ref: string) => {
+            setStatus('loading');
+            setError(null);
+            try {
+                setBbox(await fetchCustomOsmFn(osm_ref));
+                setStatus('idle');
+                return true;
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+                setStatus('error');
+                return false;
+            }
+        },
+        [fetchCustomOsmFn],
+    );
+
     useEffect(() => {
         if (bootstrapped.current) return;
         bootstrapped.current = true;
@@ -128,5 +180,7 @@ export function useSampling(options: UseSamplingOptions = {}): SamplingState {
         setStrategy,
         decide,
         skip: () => loadNext(),
+        applyCustomCentroid,
+        applyCustomOsm,
     };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { makeKeptBbox, makePoi } from '../test/fixtures';
+import type { PoiPickEntry } from '../api';
 import {
     toCenterCollection,
     toCollectiveBounds,
@@ -52,27 +53,44 @@ describe('toCenterCollection', () => {
 describe('toPoiCollection', () => {
     it('returns an empty collection when no picks have resolved to features', () => {
         expect(toPoiCollection({})).toEqual({ type: 'FeatureCollection', features: [] });
-        expect(toPoiCollection({ a: null })).toEqual({
+        expect(toPoiCollection({ a: { poi: null, completed: false } })).toEqual({
             type: 'FeatureCollection',
             features: [],
         });
     });
 
     it('emits one Point per non-null pick with bbox/osm metadata in properties', () => {
-        const fc = toPoiCollection({
-            a: makePoi({ osm_type: 'node', osm_id: 1, center: [1, 2], group: 'shops' }),
-            b: null,
-            c: makePoi({ osm_type: 'way', osm_id: 99, center: [10, 20], group: 'amenities' }),
-        });
+        const a: PoiPickEntry = {
+            poi: makePoi({ osm_type: 'node', osm_id: 1, center: [1, 2], group: 'shops' }),
+            completed: false,
+        };
+        const b: PoiPickEntry = { poi: null, completed: false };
+        const c: PoiPickEntry = {
+            poi: makePoi({ osm_type: 'way', osm_id: 99, center: [10, 20], group: 'amenities' }),
+            completed: true,
+        };
+        const fc = toPoiCollection({ a, b, c });
 
         expect(fc.features).toHaveLength(2);
         expect(fc.features[0]).toMatchObject({
             geometry: { type: 'Point', coordinates: [1, 2] },
-            properties: { bbox_id: 'a', osm_type: 'node', osm_id: 1, group: 'shops' },
+            properties: {
+                bbox_id: 'a',
+                osm_type: 'node',
+                osm_id: 1,
+                group: 'shops',
+                completed: false,
+            },
         });
         expect(fc.features[1]).toMatchObject({
             geometry: { type: 'Point', coordinates: [10, 20] },
-            properties: { bbox_id: 'c', osm_type: 'way', osm_id: 99, group: 'amenities' },
+            properties: {
+                bbox_id: 'c',
+                osm_type: 'way',
+                osm_id: 99,
+                group: 'amenities',
+                completed: true,
+            },
         });
     });
 });

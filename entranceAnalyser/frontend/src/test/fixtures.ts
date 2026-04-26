@@ -1,7 +1,7 @@
 //! Shared test fixtures for the bbox shape so individual test files don't
 //! need to repeat (or drift on) the field list.
 
-import type { Bbox, KeptBbox, Poi, PoiFocusResult } from '../api';
+import type { Bbox, CandidateSource, KeptBbox, Poi, PoiFocusResult } from '../api';
 
 export function makeBbox(overrides: Partial<Bbox> = {}): Bbox {
     return {
@@ -17,6 +17,7 @@ export function makeBbox(overrides: Partial<Bbox> = {}): Bbox {
         max_density_ratio: 0.05,
         built_volume: 500_000,
         max_built_volume_ratio: 0.25,
+        candidate_source: 'random' as CandidateSource,
         ...overrides,
     };
 }
