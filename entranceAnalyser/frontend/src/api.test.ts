@@ -2,11 +2,15 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
     fetchAppConfig,
+    deleteKept,
     fetchKept,
     fetchPoiFocuses,
     fetchPoiPicks,
+    fetchBboxAtCustomCentroid,
+    fetchBboxAtCustomOsm,
     fetchRandomBbox,
     pickPoi,
+    patchPoiPickCompleted,
     pickPoiFocus,
     submitDecision,
     type AppConfig,
@@ -64,6 +68,28 @@ describe('api client', () => {
         expect(fetchFn).toHaveBeenCalledWith('/api/bbox/random?strategy=blended&alpha=0.25');
     });
 
+    it('fetchBboxAtCustomCentroid POSTs lat/lon JSON', async () => {
+        const fetchFn = jsonFetch(SAMPLE_BBOX);
+        const bbox = await fetchBboxAtCustomCentroid(45.5, -73.5, fetchFn);
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchFn.mock.calls[0];
+        expect(url).toBe('/api/bbox/custom_centroid');
+        expect(init.method).toBe('POST');
+        expect(JSON.parse(init.body)).toEqual({ lat: 45.5, lon: -73.5 });
+        expect(bbox).toEqual(SAMPLE_BBOX);
+    });
+
+    it('fetchBboxAtCustomOsm POSTs osm_ref JSON', async () => {
+        const fetchFn = jsonFetch(SAMPLE_BBOX);
+        const bbox = await fetchBboxAtCustomOsm('way/99', fetchFn);
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchFn.mock.calls[0];
+        expect(url).toBe('/api/bbox/custom_osm');
+        expect(init.method).toBe('POST');
+        expect(JSON.parse(init.body)).toEqual({ osm_ref: 'way/99' });
+        expect(bbox).toEqual(SAMPLE_BBOX);
+    });
+
     it.each(['keep', 'reject'] as const)('submitDecision posts %s as JSON and parses the reply', async (decision) => {
         const fetchFn = jsonFetch({ ok: true, total_kept: 7 });
         const reply = await submitDecision(SAMPLE_BBOX, decision, fetchFn);
@@ -83,19 +109,33 @@ describe('api client', () => {
         expect(await fetchKept(fetchFn)).toEqual(kept);
     });
 
+    it('deleteKept sends DELETE to /kept/:id', async () => {
+        const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 204, statusText: 'No Content' }));
+        await deleteKept(SAMPLE_BBOX.id, fetchFn);
+        expect(fetchFn).toHaveBeenCalledWith(`/api/bbox/kept/${SAMPLE_BBOX.id}`, { method: 'DELETE' });
+    });
+
     it('throws a descriptive error on non-OK responses', async () => {
         const fetchFn = jsonFetch({ message: 'boom' }, { status: 500, statusText: 'Internal Server Error' });
         await expect(fetchRandomBbox(undefined, fetchFn)).rejects.toThrow(/500 Internal Server Error/);
     });
 
     it('pickPoi POSTs to /poi_pick with the bbox id in the URL', async () => {
-        const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, poi: SAMPLE_POI });
+        const fetchFn = jsonFetch({
+            bbox_id: SAMPLE_BBOX.id,
+            poi: SAMPLE_POI,
+            completed: false,
+        });
         const reply = await pickPoi(SAMPLE_BBOX.id, fetchFn);
         expect(fetchFn).toHaveBeenCalledTimes(1);
         const [url, init] = fetchFn.mock.calls[0];
         expect(url).toBe(`/api/bbox/kept/${SAMPLE_BBOX.id}/poi_pick`);
         expect(init.method).toBe('POST');
-        expect(reply).toEqual({ bbox_id: SAMPLE_BBOX.id, poi: SAMPLE_POI });
+        expect(reply).toEqual({
+            bbox_id: SAMPLE_BBOX.id,
+            poi: SAMPLE_POI,
+            completed: false,
+        });
     });
 
     it.each([
@@ -104,16 +144,35 @@ describe('api client', () => {
     ] as const)(
         'pickPoi returns a %s payload verbatim',
         async (_label, poi) => {
-            const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, poi });
+            const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, poi, completed: false });
             const reply = await pickPoi(SAMPLE_BBOX.id, fetchFn);
             expect(reply.poi).toEqual(poi);
         },
     );
 
+    it('patchPoiPickCompleted PATCHes /poi_pick with JSON body', async () => {
+        const fetchFn = jsonFetch({
+            bbox_id: SAMPLE_BBOX.id,
+            poi: SAMPLE_POI,
+            completed: true,
+        });
+        const reply = await patchPoiPickCompleted(SAMPLE_BBOX.id, true, fetchFn);
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchFn.mock.calls[0];
+        expect(url).toBe(`/api/bbox/kept/${SAMPLE_BBOX.id}/poi_pick`);
+        expect(init.method).toBe('PATCH');
+        expect(JSON.parse(init.body)).toEqual({ completed: true });
+        expect(reply.completed).toBe(true);
+    });
+
     it('fetchPoiPicks unwraps the { picks } envelope', async () => {
         const picks = [
-            { bbox_id: SAMPLE_BBOX.id, poi: SAMPLE_POI },
-            { bbox_id: '00000000-0000-0000-0000-000000000002', poi: null },
+            { bbox_id: SAMPLE_BBOX.id, poi: SAMPLE_POI, completed: false },
+            {
+                bbox_id: '00000000-0000-0000-0000-000000000002',
+                poi: null,
+                completed: false,
+            },
         ];
         const fetchFn = jsonFetch({ picks });
         expect(await fetchPoiPicks(fetchFn)).toEqual(picks);
@@ -156,17 +215,19 @@ describe('api client', () => {
     };
 
     it.each([
-        // (radiusM, expected query suffix) — undefined omits the query param entirely
+        // (radiusM, refresh, expected query suffix) — undefined radius omits `radius_m`
         // so existing /poi_focus consumers see the exact URL they used to.
-        [undefined, ''],
-        [200, '?radius_m=200'],
-        [10, '?radius_m=10'],
-        [2000, '?radius_m=2000'],
+        [undefined, false, ''],
+        [200, false, '?radius_m=200'],
+        [10, false, '?radius_m=10'],
+        [2000, false, '?radius_m=2000'],
+        [200, true, '?radius_m=200&refresh=true'],
+        [undefined, true, '?refresh=true'],
     ] as const)(
-        'pickPoiFocus POSTs to /poi_focus with radiusM=%s → suffix=%s',
-        async (radiusM, suffix) => {
+        'pickPoiFocus POSTs to /poi_focus with radiusM=%s refresh=%s → suffix=%s',
+        async (radiusM, refresh, suffix) => {
             const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, result: SAMPLE_FOCUS });
-            const reply = await pickPoiFocus(SAMPLE_BBOX.id, radiusM, fetchFn);
+            const reply = await pickPoiFocus(SAMPLE_BBOX.id, radiusM, { refresh, fetchFn });
             expect(fetchFn).toHaveBeenCalledTimes(1);
             const [url, init] = fetchFn.mock.calls[0];
             expect(url).toBe(`/api/bbox/kept/${SAMPLE_BBOX.id}/poi_focus${suffix}`);
@@ -182,7 +243,7 @@ describe('api client', () => {
         ['502 Bad Gateway (overpass)', 502, 'Bad Gateway'],
     ] as const)('pickPoiFocus surfaces %s as a thrown Error', async (_label, status, statusText) => {
         const fetchFn = jsonFetch({ message: 'nope' }, { status, statusText });
-        await expect(pickPoiFocus(SAMPLE_BBOX.id, undefined, fetchFn)).rejects.toThrow(
+        await expect(pickPoiFocus(SAMPLE_BBOX.id, undefined, { fetchFn })).rejects.toThrow(
             new RegExp(`${status} ${statusText}`),
         );
     });

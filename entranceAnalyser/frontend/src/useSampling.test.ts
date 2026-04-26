@@ -94,4 +94,61 @@ describe('useSampling', () => {
         await waitFor(() => expect(fetchNext).toHaveBeenCalled());
         expect(fetchNext).toHaveBeenCalledWith(initial);
     });
+
+    it('applyCustomCentroid loads a bbox via fetchCustomCentroid and returns true on success', async () => {
+        const first = fixture('1');
+        const custom = fixture('2');
+        const fetchNext = vi.fn().mockResolvedValue(first);
+        const fetchCustomCentroid = vi.fn().mockResolvedValue(custom);
+        const { result } = renderHook(() =>
+            useSampling({ fetchNext, submit: vi.fn(), fetchCustomCentroid }),
+        );
+        await waitFor(() => expect(result.current.bbox).toEqual(first));
+
+        let ok = false;
+        await act(async () => {
+            ok = await result.current.applyCustomCentroid(45.5, -73.5);
+        });
+        expect(ok).toBe(true);
+        expect(fetchCustomCentroid).toHaveBeenCalledExactlyOnceWith(45.5, -73.5);
+        expect(result.current.bbox).toEqual(custom);
+        expect(result.current.status).toBe('idle');
+    });
+
+    it('applyCustomCentroid returns false and sets error when fetch fails', async () => {
+        const first = fixture('1');
+        const fetchNext = vi.fn().mockResolvedValue(first);
+        const fetchCustomCentroid = vi.fn().mockRejectedValue(new Error('outside grid'));
+        const { result } = renderHook(() =>
+            useSampling({ fetchNext, submit: vi.fn(), fetchCustomCentroid }),
+        );
+        await waitFor(() => expect(result.current.bbox).toEqual(first));
+
+        let ok = true;
+        await act(async () => {
+            ok = await result.current.applyCustomCentroid(0, 0);
+        });
+        expect(ok).toBe(false);
+        expect(result.current.error).toBe('outside grid');
+        expect(result.current.status).toBe('error');
+    });
+
+    it('applyCustomOsm loads a bbox via fetchCustomOsm', async () => {
+        const first = fixture('1');
+        const custom = fixture('2');
+        const fetchNext = vi.fn().mockResolvedValue(first);
+        const fetchCustomOsm = vi.fn().mockResolvedValue(custom);
+        const { result } = renderHook(() =>
+            useSampling({ fetchNext, submit: vi.fn(), fetchCustomOsm }),
+        );
+        await waitFor(() => expect(result.current.bbox).toEqual(first));
+
+        let ok = false;
+        await act(async () => {
+            ok = await result.current.applyCustomOsm('node/1');
+        });
+        expect(ok).toBe(true);
+        expect(fetchCustomOsm).toHaveBeenCalledExactlyOnceWith('node/1');
+        expect(result.current.bbox).toEqual(custom);
+    });
 });

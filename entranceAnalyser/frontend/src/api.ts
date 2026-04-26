@@ -4,6 +4,11 @@
 //! by `vite.config.ts`, so no absolute URL is needed here. The caller
 //! decides how to surface errors; every helper throws on non-OK responses.
 
+import type { EntranceType, MeasurementPurpose } from './keptBboxes/measurementCatalog';
+
+/** How a candidate bbox was produced; stored on keep (`kept_bboxes.candidate_source`). */
+export type CandidateSource = 'random' | 'custom_centroid' | 'custom_osm';
+
 /** Matches `Bbox` in `backend/src/bbox.rs`. */
 export interface Bbox {
     id: string;
@@ -24,6 +29,11 @@ export interface Bbox {
     built_volume: number;
     /** `built_volume / max_built_volume_in_grid`, in `[0, 1]`. */
     max_built_volume_ratio: number;
+    /** Random grid draw vs custom centroid vs OSM anchor; omitted in older API payloads → treat as `random`. */
+    candidate_source?: CandidateSource;
+    /** Set when `candidate_source === 'custom_osm'` (node/way/relation used for the centre). */
+    custom_osm_type?: string;
+    custom_osm_id?: number;
 }
 
 /** Sampling strategies exposed by the backend. Matches the `StrategyName`
@@ -82,6 +92,44 @@ export async function fetchRandomBbox(
 }
 
 /**
+ * `POST /api/bbox/custom_centroid` — candidate bbox centred on the given
+ * WGS84 point. Population and built-volume figures come from the nearest
+ * grid cell so the panel stays consistent with `/random`.
+ *
+ * @param lat - Degrees north (EPSG:4326 `y`)
+ * @param lon - Degrees east (EPSG:4326 `x`)
+ */
+export async function fetchBboxAtCustomCentroid(
+    lat: number,
+    lon: number,
+    fetchFn: typeof fetch = fetch,
+): Promise<Bbox> {
+    return jsonOrThrow<Bbox>(
+        await fetchFn(`${BASE}/custom_centroid`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat, lon }),
+        }),
+    );
+}
+
+/**
+ * `POST /api/bbox/custom_osm` — candidate bbox centred on Overpass `out center`
+ * for the given `node/…`, `way/…`, or `relation/…`. Grid stats from nearest cell.
+ *
+ * @param osm_ref - e.g. `way/123456789`
+ */
+export async function fetchBboxAtCustomOsm(osm_ref: string, fetchFn: typeof fetch = fetch): Promise<Bbox> {
+    return jsonOrThrow<Bbox>(
+        await fetchFn(`${BASE}/custom_osm`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ osm_ref }),
+        }),
+    );
+}
+
+/**
  * `POST /api/bbox/decision` — keep or reject an emitted bbox.
  *
  * The full bbox is echoed back to the backend (instead of just the id)
@@ -107,6 +155,18 @@ export async function fetchKept(fetchFn: typeof fetch = fetch): Promise<KeptBbox
     return kept;
 }
 
+/**
+ * `DELETE /api/bbox/kept/:id` — remove one kept bbox. Cascades to
+ * `analyses` (poi_pick, poi_focus, …) and `poi_focus_measurements`.
+ */
+export async function deleteKept(bboxId: string, fetchFn: typeof fetch = fetch): Promise<void> {
+    const response = await fetchFn(`${BASE}/kept/${bboxId}`, { method: 'DELETE' });
+    if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`${response.status} ${response.statusText}: ${body}`.trim());
+    }
+}
+
 /** Matches `OsmType` in `backend/src/overpass.rs`. */
 export type OsmType = 'node' | 'way' | 'relation';
 
@@ -128,6 +188,14 @@ export interface Poi {
 export interface PoiPickRecord {
     bbox_id: string;
     poi: Poi | null;
+    /** Reviewer flag: show this POI as completed (green) on the overview map. */
+    completed: boolean;
+}
+
+/** Cached pick row merged into `usePoiPicks` state (no `bbox_id` in value). */
+export interface PoiPickEntry {
+    poi: Poi | null;
+    completed: boolean;
 }
 
 const ANALYSES_BASE = '/api/analyses';
@@ -146,6 +214,24 @@ export async function pickPoi(
     );
 }
 
+/**
+ * `PATCH /api/bbox/kept/:id/poi_pick` — set the reviewer completed flag
+ * (green marker on the overview map). Requires an existing `poi_pick` row.
+ */
+export async function patchPoiPickCompleted(
+    bboxId: string,
+    completed: boolean,
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiPickRecord> {
+    return jsonOrThrow<PoiPickRecord>(
+        await fetchFn(`${BASE}/kept/${bboxId}/poi_pick`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ completed }),
+        }),
+    );
+}
+
 /** `GET /api/analyses/poi_picks` — every cached POI pick on disk, in
  *  insertion order, so the map can paint markers on load. */
 export async function fetchPoiPicks(
@@ -160,9 +246,10 @@ export async function fetchPoiPicks(
 // -------- POI focus map (PR9) ------------------------------------------------
 
 /** Minimal GeoJSON geometry, mirroring `Geometry` in
- *  `backend/src/poi_focus.rs`. The backend only emits Points (entrances)
- *  and Polygons with a single outer ring (buildings); both shapes are
- *  valid drop-ins for a MapLibre `geojson` source. */
+ *  `backend/src/poi_focus.rs`. The backend emits Point features for
+ *  `entrance=*` (including `entrance=yes`) and `routing:entrance=*`
+ *  nodes, plus Polygons with a single outer ring (buildings); both
+ *  shapes are valid drop-ins for a MapLibre `geojson` source. */
 export type FocusGeometry =
     | { type: 'Point'; coordinates: [number, number] }
     | { type: 'Polygon'; coordinates: [number, number][][] };
@@ -206,8 +293,10 @@ export interface PoiFocusRecord {
  * it was computed at. Calling with the same radius is idempotent
  * (cache hit, no Overpass call); calling with a *different*
  * `radiusM` re-issues the Overpass query and overwrites the cached
- * row. When `radiusM` is omitted, the backend falls back to its
- * `POI_FOCUS_RADIUS_M` default (currently 150 m).
+ * row. Pass `{ refresh: true }` to force a new Overpass fetch at the
+ * same radius (for example after OSM edits). When `radiusM` is
+ * omitted, the backend falls back to its `POI_FOCUS_RADIUS_M`
+ * default (currently 150 m).
  *
  * Backend returns 400 when `radiusM` is outside the documented
  * range (`[10, 2000]`), 409 when no pick has run yet, and 422 when
@@ -219,17 +308,48 @@ export interface PoiFocusRecord {
  * @param radiusM - Per-request override for the `around:` buffer
  *                  (metres). Falls back to the server default when
  *                  omitted.
- * @param fetchFn - Injectable fetcher, mostly for tests.
+ * @param third - Options (`refresh`, `fetchFn`) or a bare `fetch`
+ *                implementation for backward-compatible tests.
  */
+export interface PickPoiFocusOptions {
+    refresh?: boolean;
+    fetchFn?: typeof fetch;
+}
+
+function resolvePickPoiFocusOptions(third?: PickPoiFocusOptions | typeof fetch): {
+    refresh: boolean;
+    fetchFn: typeof fetch;
+} {
+    if (third === undefined) {
+        return { refresh: false, fetchFn: fetch };
+    }
+    if (typeof third === 'function') {
+        return { refresh: false, fetchFn: third };
+    }
+    return {
+        refresh: third.refresh ?? false,
+        fetchFn: third.fetchFn ?? fetch,
+    };
+}
+
 export async function pickPoiFocus(
     bboxId: string,
     radiusM?: number,
-    fetchFn: typeof fetch = fetch,
+    third?: PickPoiFocusOptions | typeof fetch,
 ): Promise<PoiFocusRecord> {
+    const { refresh, fetchFn } = resolvePickPoiFocusOptions(third);
+    const params = new URLSearchParams();
+    if (radiusM !== undefined) {
+        params.set('radius_m', String(radiusM));
+    }
+    if (refresh) {
+        params.set('refresh', 'true');
+    }
+    const qs = params.toString();
     const url =
-        radiusM === undefined
+        qs === ''
             ? `${BASE}/kept/${bboxId}/poi_focus`
-            : `${BASE}/kept/${bboxId}/poi_focus?radius_m=${radiusM}`;
+            : `${BASE}/kept/${bboxId}/poi_focus?${qs}`;
     return jsonOrThrow<PoiFocusRecord>(await fetchFn(url, { method: 'POST' }));
 }
 
@@ -242,6 +362,99 @@ export async function fetchPoiFocuses(
         await fetchFn(`${ANALYSES_BASE}/poi_focuses`),
     );
     return focuses;
+}
+
+// -------- POI focus measurements (persisted polylines) -------------------------
+
+/** Where the first vertex is anchored (`legacy_unknown` = rows before migration 0008). */
+export type MeasurementStartOrigin =
+    | 'poi_focus_centroid'
+    | 'osm_entrance'
+    | 'legacy_unknown'
+    | 'building_centroid'
+    | 'unsnapped_start';
+
+/** Mirrors `PoiFocusMeasurement` in `backend/src/focus_measurements.rs`. */
+export interface PoiFocusMeasurement {
+    id: string;
+    bbox_id: string;
+    coordinates: [number, number][];
+    walking_speed_kmh: number;
+    length_m: number;
+    measurement_type: MeasurementPurpose;
+    entrance_type: EntranceType;
+    start_origin: MeasurementStartOrigin;
+    /** OSM node id (`osm_entrance`), OSM way id (`building_centroid`); otherwise `null`. */
+    start_osm_node_id: number | null;
+    created_at: string;
+}
+
+/** Request body for POST/PATCH measurement endpoints. */
+export interface PoiFocusMeasurementWriteBody {
+    coordinates: [number, number][];
+    walking_speed_kmh: number;
+    measurement_type: MeasurementPurpose;
+    entrance_type: EntranceType;
+    start_origin: Exclude<MeasurementStartOrigin, 'legacy_unknown'>;
+    start_osm_node_id: number | null;
+}
+
+/** `GET /api/bbox/kept/:id/poi_focus_measurements` */
+export async function fetchPoiFocusMeasurements(
+    bboxId: string,
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiFocusMeasurement[]> {
+    const { measurements } = await jsonOrThrow<{ measurements: PoiFocusMeasurement[] }>(
+        await fetchFn(`${BASE}/kept/${bboxId}/poi_focus_measurements`),
+    );
+    return measurements;
+}
+
+/** `POST /api/bbox/kept/:id/poi_focus_measurements` */
+export async function createPoiFocusMeasurement(
+    bboxId: string,
+    body: PoiFocusMeasurementWriteBody,
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiFocusMeasurement> {
+    return jsonOrThrow<PoiFocusMeasurement>(
+        await fetchFn(`${BASE}/kept/${bboxId}/poi_focus_measurements`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }),
+    );
+}
+
+/** `PATCH /api/bbox/kept/:id/poi_focus_measurements/:measureId` */
+export async function updatePoiFocusMeasurement(
+    bboxId: string,
+    measureId: string,
+    body: PoiFocusMeasurementWriteBody,
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiFocusMeasurement> {
+    return jsonOrThrow<PoiFocusMeasurement>(
+        await fetchFn(`${BASE}/kept/${bboxId}/poi_focus_measurements/${measureId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }),
+    );
+}
+
+/** `DELETE /api/bbox/kept/:id/poi_focus_measurements/:measureId` */
+export async function deletePoiFocusMeasurement(
+    bboxId: string,
+    measureId: string,
+    fetchFn: typeof fetch = fetch,
+): Promise<void> {
+    const response = await fetchFn(
+        `${BASE}/kept/${bboxId}/poi_focus_measurements/${measureId}`,
+        { method: 'DELETE' },
+    );
+    if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`${response.status} ${response.statusText}: ${body}`.trim());
+    }
 }
 
 // -------- Public runtime config (PR10) ---------------------------------------

@@ -1,14 +1,17 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import { BasemapToggle } from './BasemapToggle';
+import { CustomCentroidModal } from './CustomCentroidModal';
 import { BASEMAPS, DEFAULT_BASEMAP_ID, type BasemapId } from './basemaps';
 import { KeptBboxesMap } from './keptBboxes/KeptBboxesMap';
 import { PoiFocusMap } from './keptBboxes/PoiFocusMap';
 import { useKeptBboxes } from './keptBboxes/useKeptBboxes';
 import { usePoiFocus } from './keptBboxes/usePoiFocus';
+import { usePoiFocusMeasurements } from './keptBboxes/usePoiFocusMeasurements';
 import { usePoiPicks } from './keptBboxes/usePoiPicks';
 import { MapView } from './MapView';
 import { SamplingPanel } from './SamplingPanel';
+import { submitDecision, type Bbox, type Decision } from './api';
 import { useAppConfig } from './useAppConfig';
 import { useSampling } from './useSampling';
 
@@ -20,14 +23,41 @@ const FALLBACK_OSM_EDITOR_URL = 'https://www.openstreetmap.org/edit#map={zoom}/{
 
 type AppView = 'sampling' | 'kept' | 'focus';
 
+const REMOVE_KEPT_CONFIRM =
+    'Remove this cell from kept? Cached POI picks, focus results, and measurements will be deleted.';
+
 function App() {
     const [view, setView] = useState<AppView>('sampling');
     const [focusBboxId, setFocusBboxId] = useState<string | null>(null);
+    const [removingKeptId, setRemovingKeptId] = useState<string | null>(null);
     const [basemapId, setBasemapId] = useState<BasemapId>(DEFAULT_BASEMAP_ID);
-    const { bbox, keptCount, status, error, strategy, setStrategy, decide, skip } = useSampling();
+    const [customCentroidOpen, setCustomCentroidOpen] = useState(false);
     const kept = useKeptBboxes();
     const poiPicks = usePoiPicks();
+    const submitWithReload = useMemo(
+        () => async (bbox: Bbox, decision: Decision) => {
+            const reply = await submitDecision(bbox, decision);
+            if (decision === 'keep') {
+                await Promise.all([kept.reload(), poiPicks.reload()]);
+            }
+            return reply;
+        },
+        [kept.reload, poiPicks.reload],
+    );
+    const {
+        bbox,
+        keptCount,
+        status,
+        error,
+        strategy,
+        setStrategy,
+        decide,
+        skip,
+        applyCustomCentroid,
+        applyCustomOsm,
+    } = useSampling({ submit: submitWithReload });
     const poiFocus = usePoiFocus();
+    const focusMeasurements = usePoiFocusMeasurements(focusBboxId);
     const appConfig = useAppConfig();
 
     /**
@@ -45,10 +75,30 @@ function App() {
         [poiFocus],
     );
 
+    const handleRemoveKept = useCallback(
+        async (bboxId: string) => {
+            if (!window.confirm(REMOVE_KEPT_CONFIRM)) return;
+            setRemovingKeptId(bboxId);
+            try {
+                await kept.removeKept(bboxId);
+                poiPicks.removePickForBbox(bboxId);
+                poiFocus.dropFocus(bboxId);
+                if (focusBboxId === bboxId) {
+                    setFocusBboxId(null);
+                    setView('kept');
+                }
+            } finally {
+                setRemovingKeptId(null);
+            }
+        },
+        [kept, poiPicks, poiFocus, focusBboxId],
+    );
+
     const focusBbox = focusBboxId
         ? kept.keptBboxes.find((b) => b.id === focusBboxId) ?? null
         : null;
-    const focusPoi = focusBboxId ? poiPicks.picks[focusBboxId] : undefined;
+    const focusPick = focusBboxId ? poiPicks.picks[focusBboxId] : undefined;
+    const focusPoi = focusPick?.poi;
 
     return (
         <div className="app">
@@ -81,13 +131,21 @@ function App() {
                     />
                     <SamplingPanel
                         bbox={bbox}
-                        keptCount={keptCount}
+                        keptCount={kept.status === 'idle' ? kept.keptBboxes.length : keptCount}
                         status={status}
                         error={error}
                         strategy={strategy}
                         onStrategyChange={setStrategy}
                         onDecide={decide}
                         onSkip={skip}
+                        onOpenCustomCentroid={() => setCustomCentroidOpen(true)}
+                    />
+                    <CustomCentroidModal
+                        open={customCentroidOpen}
+                        onClose={() => setCustomCentroidOpen(false)}
+                        busy={status === 'loading'}
+                        onApplyLatLon={applyCustomCentroid}
+                        onApplyOsmRef={applyCustomOsm}
                     />
                 </>
             )}
@@ -101,9 +159,15 @@ function App() {
                         error={kept.error}
                         picks={poiPicks.picks}
                         picking={poiPicks.picking}
+                        savingPickCompleted={poiPicks.savingCompleted}
                         onPickPoi={poiPicks.pick}
+                        onSetPickCompleted={(id, completed) => {
+                            void poiPicks.setPickCompleted(id, completed);
+                        }}
                         onOpenFocus={handleOpenFocus}
                         openingFocus={poiFocus.loading}
+                        onRemoveFromKept={handleRemoveKept}
+                        removingKeptBboxId={removingKeptId}
                     />
                     <BasemapToggle
                         basemaps={BASEMAPS}
@@ -113,7 +177,7 @@ function App() {
                 </>
             )}
 
-            {view === 'focus' && focusBbox && focusPoi && (
+            {view === 'focus' && focusBbox && focusPoi && focusPick && (
                 <>
                     <PoiFocusMap
                         // Re-mount when the user pivots between bboxes so
@@ -122,6 +186,13 @@ function App() {
                         key={focusBbox.id}
                         bbox={focusBbox}
                         pickedPoi={focusPoi}
+                        poiPickCompleted={focusPick.completed}
+                        poiPickCompletedSaving={poiPicks.savingCompleted.has(focusBbox.id)}
+                        onSetPoiPickCompleted={(completed) => {
+                            void poiPicks.setPickCompleted(focusBbox.id, completed);
+                        }}
+                        onRemoveFromKept={() => void handleRemoveKept(focusBbox.id)}
+                        removeFromKeptBusy={removingKeptId === focusBbox.id}
                         focus={poiFocus.focuses[focusBbox.id]}
                         loading={poiFocus.loading.has(focusBbox.id)}
                         error={poiFocus.error}
@@ -131,6 +202,12 @@ function App() {
                         osmEditorUrlTemplate={
                             appConfig.config?.osm_editor_url ?? FALLBACK_OSM_EDITOR_URL
                         }
+                        measurements={focusMeasurements.measurements}
+                        measurementsLoading={focusMeasurements.loading}
+                        measurementsError={focusMeasurements.error}
+                        onCreateMeasurement={focusMeasurements.create}
+                        onUpdateMeasurement={focusMeasurements.update}
+                        onDeleteMeasurement={focusMeasurements.remove}
                     />
                     <BasemapToggle
                         basemaps={BASEMAPS}
