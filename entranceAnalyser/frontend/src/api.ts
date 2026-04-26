@@ -201,20 +201,36 @@ export interface PoiFocusRecord {
 /**
  * `POST /api/bbox/kept/:id/poi_focus` — fetch (and cache) the
  * buildings + entrances around the previously-picked POI.
- * Idempotent on the server side: subsequent calls return the cached
- * result without re-querying Overpass.
  *
- * Backend returns 409 when no pick has run yet and 422 when the pick
- * was empty; both surface as a thrown `Error` whose message starts
- * with the status code, so the caller can distinguish them.
+ * The server caches one focus result per bbox keyed on the radius
+ * it was computed at. Calling with the same radius is idempotent
+ * (cache hit, no Overpass call); calling with a *different*
+ * `radiusM` re-issues the Overpass query and overwrites the cached
+ * row. When `radiusM` is omitted, the backend falls back to its
+ * `POI_FOCUS_RADIUS_M` default (currently 150 m).
+ *
+ * Backend returns 400 when `radiusM` is outside the documented
+ * range (`[10, 2000]`), 409 when no pick has run yet, and 422 when
+ * the pick was empty. All three surface as a thrown `Error` whose
+ * message starts with the status code, so the caller can branch
+ * on it.
+ *
+ * @param bboxId  - UUID of the kept bbox.
+ * @param radiusM - Per-request override for the `around:` buffer
+ *                  (metres). Falls back to the server default when
+ *                  omitted.
+ * @param fetchFn - Injectable fetcher, mostly for tests.
  */
 export async function pickPoiFocus(
     bboxId: string,
+    radiusM?: number,
     fetchFn: typeof fetch = fetch,
 ): Promise<PoiFocusRecord> {
-    return jsonOrThrow<PoiFocusRecord>(
-        await fetchFn(`${BASE}/kept/${bboxId}/poi_focus`, { method: 'POST' }),
-    );
+    const url =
+        radiusM === undefined
+            ? `${BASE}/kept/${bboxId}/poi_focus`
+            : `${BASE}/kept/${bboxId}/poi_focus?radius_m=${radiusM}`;
+    return jsonOrThrow<PoiFocusRecord>(await fetchFn(url, { method: 'POST' }));
 }
 
 /** `GET /api/analyses/poi_focuses` — every cached focus result on
