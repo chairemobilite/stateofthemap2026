@@ -227,3 +227,21 @@ export async function fetchPoiFocuses(
     );
     return focuses;
 }
+
+// -------- Public runtime config (PR10) ---------------------------------------
+
+/** Mirrors `AppConfig` in `backend/src/api.rs`. Read once on app
+ *  mount; the backend re-reads its env at startup, so values change
+ *  by restarting the backend rather than rebuilding the frontend.
+ *  The `osm_editor_url` template supports `{lat}` / `{lon}` /
+ *  `{zoom}` placeholders, which the frontend substitutes at click
+ *  time when opening the OSM editor. */
+export interface AppConfig {
+    osm_editor_url: string;
+    poi_focus_radius_m: number;
+}
+
+/** `GET /api/config` — fetch the public-facing runtime config. */
+export async function fetchAppConfig(fetchFn: typeof fetch = fetch): Promise<AppConfig> {
+    return jsonOrThrow<AppConfig>(await fetchFn('/api/config'));
+}

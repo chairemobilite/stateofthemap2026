@@ -9,7 +9,14 @@ import { usePoiFocus } from './keptBboxes/usePoiFocus';
 import { usePoiPicks } from './keptBboxes/usePoiPicks';
 import { MapView } from './MapView';
 import { SamplingPanel } from './SamplingPanel';
+import { useAppConfig } from './useAppConfig';
 import { useSampling } from './useSampling';
+
+/** Fallback OSM editor URL used while the backend config is still
+ *  loading or if the request fails. Mirrors `DEFAULT_OSM_EDITOR_URL`
+ *  in the backend so the frontend behaviour is identical to a fresh
+ *  install with no `OSM_EDITOR_URL` env var set. */
+const FALLBACK_OSM_EDITOR_URL = 'https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}';
 
 type AppView = 'sampling' | 'kept' | 'focus';
 
@@ -21,6 +28,7 @@ function App() {
     const kept = useKeptBboxes();
     const poiPicks = usePoiPicks();
     const poiFocus = usePoiFocus();
+    const appConfig = useAppConfig();
 
     /**
      * Open the focus view for one bbox: pin the active id and trigger
@@ -120,6 +128,9 @@ function App() {
                         basemapId={basemapId}
                         onBack={() => setView('kept')}
                         onLoadFocus={poiFocus.loadFocus}
+                        osmEditorUrlTemplate={
+                            appConfig.config?.osm_editor_url ?? FALLBACK_OSM_EDITOR_URL
+                        }
                     />
                     <BasemapToggle
                         basemaps={BASEMAPS}
