@@ -13,6 +13,11 @@
 //!   `out geom` is significantly more involved. A first-cut focus map
 //!   that under-counts the few multi-polygon buildings is acceptable;
 //!   we can lift the restriction once it bites.
+//!   _Known limitation_: any building mapped as
+//!   `relation[building][type=multipolygon]` is silently skipped,
+//!   even with `building=yes`. Widening the user-set radius does not
+//!   help — only a QL change here will. Tracked alongside the
+//!   per-request radius work in PR11.
 //! * **`entrance=*` nodes only**, not `door=*`. The mapping question is
 //!   "does this building have its entrances mapped?", not "does any
 //!   sub-feature have a door tag". Including `door=*` would inflate the

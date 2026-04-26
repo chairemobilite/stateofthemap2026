@@ -275,18 +275,27 @@ Scope decisions, all reversible without schema changes:
 - **Ways for buildings, not relations.** Multipolygon `building`
   relations are rare and decoding their `out geom` members is
   significantly more involved; the first cut under-counts them
-  intentionally.
+  intentionally. _Known limitation: a focus map will quietly miss
+  any building mapped as a multipolygon, even with `building=yes`._
+  Lifting this means querying `relation[building][type=multipolygon]`
+  alongside the way query and assembling the outer ring(s) from
+  `out geom`'s `members` array.
 - **`entrance=*` nodes only**, not `door=*`. The mapping question
   is whether buildings have *entrances* mapped, not whether
   interior doors carry a tag.
-- **Buffer radius is server-config.** `POI_FOCUS_RADIUS_M`
-  (default `150`) is read once at startup; every cached row echoes
-  the radius it was fetched with, so changing the value affects
-  new requests only.
+- **Buffer radius is per-request, with a server-side default.**
+  `POI_FOCUS_RADIUS_M` (default `150`) is read once at startup and
+  used when the caller omits the override. Clients can pass
+  `?radius_m=N` (`[10, 2000]` m) to widen or shrink the buffer for
+  one bbox at a time — the focus map's header form does exactly
+  that. The single cached row per bbox is overwritten when the
+  radius changes (latest-wins), and `payload.radius_m` always
+  echoes the value the row was computed at.
 
 The endpoint returns:
 
 - `200 OK` with the focus result on success (cached or fresh).
+- `400 Bad Request` if `?radius_m=` is outside `[10, 2000]`.
 - `409 Conflict` if `/poi_pick` has not run for this bbox yet.
 - `422 Unprocessable Entity` if `/poi_pick` ran but the cell was
   empty — there's no POI to anchor the focus map on.
