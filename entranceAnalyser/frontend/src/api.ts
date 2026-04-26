@@ -457,6 +457,39 @@ export async function deletePoiFocusMeasurement(
     }
 }
 
+/** Min / max / mean / median for length (m) or duration (s). Mirrors `MeasurementFourNumberStats`. */
+export interface MeasurementFourNumberStats {
+    min: number;
+    max: number;
+    avg: number;
+    median: number;
+}
+
+/** One grouped row from `GET /api/analyses/poi_focus_measurement_stats`. */
+export interface MeasurementPairAggregate {
+    attr_a: string;
+    attr_b: string;
+    n: number;
+    length_m: MeasurementFourNumberStats;
+    duration_s: MeasurementFourNumberStats;
+}
+
+/** Wire shape for `GET /api/analyses/poi_focus_measurement_stats`. */
+export interface PoiFocusMeasurementStats {
+    by_measurement_type_and_entrance_type: MeasurementPairAggregate[];
+    by_measurement_type_and_start_origin: MeasurementPairAggregate[];
+    by_entrance_type_and_start_origin: MeasurementPairAggregate[];
+}
+
+/** `GET /api/analyses/poi_focus_measurement_stats` — global aggregates by attribute pairs. */
+export async function fetchPoiFocusMeasurementStats(
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiFocusMeasurementStats> {
+    return jsonOrThrow<PoiFocusMeasurementStats>(
+        await fetchFn(`${ANALYSES_BASE}/poi_focus_measurement_stats`),
+    );
+}
+
 // -------- Public runtime config (PR10) ---------------------------------------
 
 /** Mirrors `AppConfig` in `backend/src/api.rs`. Read once on app

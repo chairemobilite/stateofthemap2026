@@ -263,6 +263,36 @@ impl FromStr for EntranceKind {
     }
 }
 
+/// Min / max / mean / median for one numeric series (length in metres or
+/// duration in seconds), returned by [`crate::storage::PgStore::aggregate_poi_focus_measurement_pair_stats`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementFourNumberStats {
+    pub min: f64,
+    pub max: f64,
+    pub avg: f64,
+    pub median: f64,
+}
+
+/// One row of grouped statistics for a pair of categorical columns on
+/// `poi_focus_measurements`. Duration uses the same model as the UI:
+/// seconds $= \texttt{length\_m} \times 3600 / (1000 \times \texttt{walking\_speed\_kmh})$.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementPairAggregate {
+    pub attr_a: String,
+    pub attr_b: String,
+    pub n: i64,
+    pub length_m: MeasurementFourNumberStats,
+    pub duration_s: MeasurementFourNumberStats,
+}
+
+/// All pairwise breakdowns exposed on `GET …/poi_focus_measurement_stats`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PoiFocusMeasurementStats {
+    pub by_measurement_type_and_entrance_type: Vec<MeasurementPairAggregate>,
+    pub by_measurement_type_and_start_origin: Vec<MeasurementPairAggregate>,
+    pub by_entrance_type_and_start_origin: Vec<MeasurementPairAggregate>,
+}
+
 /// One persisted polyline from the focus-map measurement tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PoiFocusMeasurement {

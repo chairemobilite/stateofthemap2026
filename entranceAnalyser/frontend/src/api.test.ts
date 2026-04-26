@@ -5,6 +5,7 @@ import {
     deleteKept,
     fetchKept,
     fetchPoiFocuses,
+    fetchPoiFocusMeasurementStats,
     fetchPoiPicks,
     fetchBboxAtCustomCentroid,
     fetchBboxAtCustomOsm,
@@ -253,6 +254,17 @@ describe('api client', () => {
         const fetchFn = jsonFetch({ focuses });
         expect(await fetchPoiFocuses(fetchFn)).toEqual(focuses);
         expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_focuses');
+    });
+
+    it('fetchPoiFocusMeasurementStats GETs analyses aggregate endpoint', async () => {
+        const body = {
+            by_measurement_type_and_entrance_type: [],
+            by_measurement_type_and_start_origin: [],
+            by_entrance_type_and_start_origin: [],
+        };
+        const fetchFn = jsonFetch(body);
+        expect(await fetchPoiFocusMeasurementStats(fetchFn)).toEqual(body);
+        expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_focus_measurement_stats');
     });
 
     it('fetchAppConfig hits /api/config and returns the parsed body', async () => {

@@ -25,7 +25,8 @@ use uuid::Uuid;
 
 use crate::bbox::{Bbox, CandidateSource, KeptBbox};
 use crate::focus_measurements::{
-    EntranceKind, MeasurementPurpose, MeasurementStartOrigin, PoiFocusMeasurement,
+    EntranceKind, MeasurementFourNumberStats, MeasurementPairAggregate, MeasurementPurpose,
+    MeasurementStartOrigin, PoiFocusMeasurement, PoiFocusMeasurementStats,
 };
 use crate::overpass::Poi;
 use crate::poi_focus::PoiFocusResult;
@@ -414,6 +415,68 @@ impl PgStore {
             .await?;
         Ok(res.rows_affected() > 0)
     }
+
+    /// Aggregate path length (m) and walking duration (s) for every distinct
+    /// pair of values among `measurement_type`, `entrance_type`, and
+    /// `start_origin` (three groupings). Duration matches the frontend:
+    /// `(length_m / 1000) / (walking_speed_kmh / 3600)`.
+    pub async fn aggregate_poi_focus_measurement_pair_stats(
+        &self,
+    ) -> Result<PoiFocusMeasurementStats, sqlx::Error> {
+        let by_measurement_type_and_entrance_type = Self::measurement_pair_bucket(
+            &self.pool,
+            "measurement_type",
+            "entrance_type",
+        )
+        .await?;
+        let by_measurement_type_and_start_origin = Self::measurement_pair_bucket(
+            &self.pool,
+            "measurement_type",
+            "start_origin",
+        )
+        .await?;
+        let by_entrance_type_and_start_origin = Self::measurement_pair_bucket(
+            &self.pool,
+            "entrance_type",
+            "start_origin",
+        )
+        .await?;
+        Ok(PoiFocusMeasurementStats {
+            by_measurement_type_and_entrance_type,
+            by_measurement_type_and_start_origin,
+            by_entrance_type_and_start_origin,
+        })
+    }
+
+    async fn measurement_pair_bucket(
+        pool: &PgPool,
+        col_a: &'static str,
+        col_b: &'static str,
+    ) -> Result<Vec<MeasurementPairAggregate>, sqlx::Error> {
+        // `col_a` / `col_b` are fixed identifiers from Rust, not user input.
+        let sql = format!(
+            "SELECT {col_a} AS attr_a, {col_b} AS attr_b, \
+                    COUNT(*)::bigint AS n, \
+                    MIN(length_m)::float8 AS lm_min, \
+                    MAX(length_m)::float8 AS lm_max, \
+                    AVG(length_m)::float8 AS lm_avg, \
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY length_m::float8) AS lm_med, \
+                    MIN((length_m::float8 * 3600.0) / (1000.0 * walking_speed_kmh)) AS ds_min, \
+                    MAX((length_m::float8 * 3600.0) / (1000.0 * walking_speed_kmh)) AS ds_max, \
+                    AVG((length_m::float8 * 3600.0) / (1000.0 * walking_speed_kmh)) AS ds_avg, \
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY \
+                      (length_m::float8 * 3600.0) / (1000.0 * walking_speed_kmh)) AS ds_med \
+             FROM poi_focus_measurements \
+             GROUP BY {col_a}, {col_b} \
+             ORDER BY {col_a}, {col_b}",
+            col_a = col_a,
+            col_b = col_b,
+        );
+        let rows = sqlx::query_as::<_, MeasurementPairAggRow>(&sql)
+            .fetch_all(pool)
+            .await?;
+        Ok(rows.into_iter().map(MeasurementPairAggRow::into_public).collect())
+    }
 }
 
 /// Row shape for `poi_focus_measurements` reads/writes.
@@ -429,6 +492,43 @@ struct MeasurementRow {
     start_origin: String,
     start_osm_node_id: Option<i64>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct MeasurementPairAggRow {
+    attr_a: String,
+    attr_b: String,
+    n: i64,
+    lm_min: f64,
+    lm_max: f64,
+    lm_avg: f64,
+    lm_med: f64,
+    ds_min: f64,
+    ds_max: f64,
+    ds_avg: f64,
+    ds_med: f64,
+}
+
+impl MeasurementPairAggRow {
+    fn into_public(self) -> MeasurementPairAggregate {
+        MeasurementPairAggregate {
+            attr_a: self.attr_a,
+            attr_b: self.attr_b,
+            n: self.n,
+            length_m: MeasurementFourNumberStats {
+                min: self.lm_min,
+                max: self.lm_max,
+                avg: self.lm_avg,
+                median: self.lm_med,
+            },
+            duration_s: MeasurementFourNumberStats {
+                min: self.ds_min,
+                max: self.ds_max,
+                avg: self.ds_avg,
+                median: self.ds_med,
+            },
+        }
+    }
 }
 
 impl MeasurementRow {
