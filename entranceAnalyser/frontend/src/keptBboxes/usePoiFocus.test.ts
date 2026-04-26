@@ -36,35 +36,45 @@ describe('usePoiFocus', () => {
         expect(result.current.error).toBe('boom');
     });
 
-    it('loadFocus(id) marks the bbox as in-flight, then merges the response', async () => {
-        const fetchAll = vi.fn().mockResolvedValue([]);
-        let resolve!: (value: PoiFocusRecord) => void;
-        const loadOne = vi.fn().mockImplementation(
-            () =>
-                new Promise<PoiFocusRecord>((r) => {
-                    resolve = r;
-                }),
-        );
+    it.each([
+        // (radiusArg, focusRadius) — radiusArg is what we pass to loadFocus,
+        // focusRadius is what the (mocked) backend returns. They differ on
+        // purpose so the test catches a regression where the radius arg is
+        // dropped instead of passed through.
+        [undefined, 250],
+        [400, 400],
+    ] as const)(
+        'loadFocus(id, %s) marks in-flight, threads radius to loadOne, and merges the response',
+        async (radiusArg, focusRadius) => {
+            const fetchAll = vi.fn().mockResolvedValue([]);
+            let resolve!: (value: PoiFocusRecord) => void;
+            const loadOne = vi.fn().mockImplementation(
+                () =>
+                    new Promise<PoiFocusRecord>((r) => {
+                        resolve = r;
+                    }),
+            );
 
-        const { result } = renderHook(() => usePoiFocus({ fetchAll, loadOne }));
-        await waitFor(() => expect(result.current.status).toBe('idle'));
+            const { result } = renderHook(() => usePoiFocus({ fetchAll, loadOne }));
+            await waitFor(() => expect(result.current.status).toBe('idle'));
 
-        let loadPromise!: Promise<void>;
-        act(() => {
-            loadPromise = result.current.loadFocus(ID_A);
-        });
-        await waitFor(() => expect(result.current.loading.has(ID_A)).toBe(true));
+            let loadPromise!: Promise<void>;
+            act(() => {
+                loadPromise = result.current.loadFocus(ID_A, radiusArg);
+            });
+            await waitFor(() => expect(result.current.loading.has(ID_A)).toBe(true));
 
-        const focus = makePoiFocus({ radius_m: 250 });
-        await act(async () => {
-            resolve({ bbox_id: ID_A, result: focus });
-            await loadPromise;
-        });
+            const focus = makePoiFocus({ radius_m: focusRadius });
+            await act(async () => {
+                resolve({ bbox_id: ID_A, result: focus });
+                await loadPromise;
+            });
 
-        expect(result.current.loading.has(ID_A)).toBe(false);
-        expect(result.current.focuses[ID_A]).toEqual(focus);
-        expect(loadOne).toHaveBeenCalledWith(ID_A);
-    });
+            expect(result.current.loading.has(ID_A)).toBe(false);
+            expect(result.current.focuses[ID_A]).toEqual(focus);
+            expect(loadOne).toHaveBeenCalledWith(ID_A, radiusArg);
+        },
+    );
 
     it.each([
         ['409 Conflict (no pick)', '409 Conflict: no POI pick yet'],
