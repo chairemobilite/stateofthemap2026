@@ -56,6 +56,7 @@ available (Postgres.app, `brew install postgis`, or the
 ```bash
 cd entranceAnalyser
 cargo run --bin entrance-analyser-ensure-db   # creates $PG_DATABASE and $PG_DATABASE_TEST
+cargo run --bin entrance-analyser-migrate     # optional: apply migrations using .env (server also migrates on startup)
 cargo test                                    # migrations run in a disposable DB per test
 cd frontend && yarn test
 ```
