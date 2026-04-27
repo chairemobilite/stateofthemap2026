@@ -9,6 +9,7 @@ use entrance_analyser_backend::poi_focus::{
 };
 use entrance_analyser_backend::focus_measurements::{
     path_length_m_haversine, EntranceKind, MeasurementPurpose, MeasurementStartOrigin,
+    PoiFocusMeasurementStats,
 };
 use entrance_analyser_backend::storage::PgStore;
 use serde_json::json;
@@ -292,6 +293,67 @@ async fn poi_focus_measurements_crud_round_trip() {
         .await
         .unwrap());
     assert!(store.list_poi_focus_measurements(id).await.unwrap().is_empty());
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn poi_focus_measurement_stats_groups_pairs_with_median_length_and_duration() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let store = PgStore::new(db.pool.clone());
+    let bbox = sample_bbox([0.0, 0.0]);
+    let id = bbox.id;
+    store.append(bbox).await.unwrap();
+
+    let seg = |dx: f64| vec![[0.0_f64, 0.0_f64], [dx, 0.0_f64]];
+    let len = |dx: f64| path_length_m_haversine(&seg(dx)).unwrap();
+
+    store
+        .insert_poi_focus_measurement(
+            id,
+            &seg(0.001),
+            5.0,
+            len(0.001),
+            MeasurementPurpose::ToNearestEntrance,
+            EntranceKind::Main,
+            MeasurementStartOrigin::PoiFocusCentroid,
+            None,
+        )
+        .await
+        .unwrap();
+    store
+        .insert_poi_focus_measurement(
+            id,
+            &seg(0.003),
+            5.0,
+            len(0.003),
+            MeasurementPurpose::ToNearestEntrance,
+            EntranceKind::Main,
+            MeasurementStartOrigin::OsmEntrance,
+            Some(1),
+        )
+        .await
+        .unwrap();
+
+    let stats: PoiFocusMeasurementStats = store
+        .aggregate_poi_focus_measurement_pair_stats()
+        .await
+        .unwrap();
+    let row = stats
+        .by_measurement_type_and_entrance_type
+        .iter()
+        .find(|r| {
+            r.attr_a == "to_nearest_entrance"
+                && r.attr_b == "main"
+                && r.n == 2
+        })
+        .expect("one grouped row for entrance+main");
+    assert!((row.length_m.median - (len(0.001) as f64 + len(0.003) as f64) / 2.0).abs() < 1.0);
+    let d0 = len(0.001) as f64 * 3600.0 / (1000.0 * 5.0);
+    let d1 = len(0.003) as f64 * 3600.0 / (1000.0 * 5.0);
+    assert!((row.duration_s.median - (d0 + d1) / 2.0).abs() < 1.0);
 
     db.cleanup().await.ok();
 }

@@ -18,6 +18,7 @@
 //! - `POST /api/bbox/kept/:id/poi_focus_measurements` → create one polyline
 //! - `PATCH /api/bbox/kept/:id/poi_focus_measurements/:measure_id` → update geometry + speed
 //! - `DELETE /api/bbox/kept/:id/poi_focus_measurements/:measure_id` → remove one row
+//! - `GET  /api/analyses/poi_focus_measurement_stats` → min/max/avg/median length and duration by attribute pairs
 //!
 //! The server is stateless between requests: the client echoes the
 //! full bbox back on decision, which lets us persist it in a single
@@ -39,7 +40,8 @@ use uuid::Uuid;
 use crate::bbox::{bbox_from_cell, random_bbox, Bbox, CandidateSource, KeptBbox};
 use crate::focus_measurements::{
     path_length_m_haversine, validate_coordinates, validate_measurement_start_for_write,
-    validate_walking_speed_kmh, PoiFocusMeasurement, PoiFocusMeasurementUpsertBody,
+    validate_walking_speed_kmh, PoiFocusMeasurement, PoiFocusMeasurementStats,
+    PoiFocusMeasurementUpsertBody,
 };
 use crate::overpass::{parse_osm_ref, OverpassClient, OverpassError, OsmType, Poi};
 use crate::poi_config::PoiTagConfig;
@@ -129,6 +131,10 @@ pub fn router(state: AppState) -> Router {
             patch(poi_focus_measurements_update_handler).delete(poi_focus_measurements_delete_handler),
         )
         .route("/api/analyses/poi_focuses", get(poi_focuses_handler))
+        .route(
+            "/api/analyses/poi_focus_measurement_stats",
+            get(poi_focus_measurement_stats_handler),
+        )
         .with_state(state)
 }
 
@@ -602,6 +608,17 @@ async fn poi_focuses_handler(
         .map(|(bbox_id, result)| PoiFocusResponse { bbox_id, result })
         .collect();
     Ok(Json(PoiFocusesResponse { focuses }))
+}
+
+async fn poi_focus_measurement_stats_handler(
+    State(state): State<AppState>,
+) -> Result<Json<PoiFocusMeasurementStats>, ApiError> {
+    let stats = state
+        .store
+        .aggregate_poi_focus_measurement_pair_stats()
+        .await
+        .map_err(internal)?;
+    Ok(Json(stats))
 }
 
 #[derive(Debug, Serialize)]

@@ -4,6 +4,7 @@ import { BasemapToggle } from './BasemapToggle';
 import { CustomCentroidModal } from './CustomCentroidModal';
 import { BASEMAPS, DEFAULT_BASEMAP_ID, type BasemapId } from './basemaps';
 import { KeptBboxesMap } from './keptBboxes/KeptBboxesMap';
+import { MeasurementStatsPage } from './MeasurementStatsPage';
 import { PoiFocusMap } from './keptBboxes/PoiFocusMap';
 import { useKeptBboxes } from './keptBboxes/useKeptBboxes';
 import { usePoiFocus } from './keptBboxes/usePoiFocus';
@@ -21,7 +22,7 @@ import { useSampling } from './useSampling';
  *  install with no `OSM_EDITOR_URL` env var set. */
 const FALLBACK_OSM_EDITOR_URL = 'https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}';
 
-type AppView = 'sampling' | 'kept' | 'focus';
+type AppView = 'sampling' | 'kept' | 'focus' | 'stats';
 
 const REMOVE_KEPT_CONFIRM =
     'Remove this cell from kept? Cached POI picks, focus results, and measurements will be deleted.';
@@ -118,6 +119,13 @@ function App() {
                     >
                         Kept bboxes
                     </button>
+                    <button
+                        type="button"
+                        aria-pressed={view === 'stats'}
+                        onClick={() => setView('stats')}
+                    >
+                        Stats
+                    </button>
                 </nav>
             )}
 
@@ -149,6 +157,8 @@ function App() {
                     />
                 </>
             )}
+
+            {view === 'stats' && <MeasurementStatsPage />}
 
             {view === 'kept' && (
                 <>

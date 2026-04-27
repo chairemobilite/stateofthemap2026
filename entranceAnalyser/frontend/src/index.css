@@ -895,3 +895,107 @@ body {
     background: #fee2e2;
     color: #991b1b;
 }
+
+/* -------- Measurement stats (global aggregates) ----------------------------- */
+
+.measurement-stats-page {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    padding: 3.25rem 1rem 1.5rem;
+    background: #f8fafc;
+    box-sizing: border-box;
+}
+
+.measurement-stats-page__header {
+    max-width: 72rem;
+    margin: 0 auto 1rem;
+}
+
+.measurement-stats-page__title {
+    margin: 0 0 0.5rem;
+    font-size: 1.35rem;
+}
+
+.measurement-stats-page__intro {
+    margin: 0;
+    max-width: 52rem;
+    font-size: 0.9rem;
+    color: #334155;
+}
+
+.measurement-stats-page__body {
+    max-width: 72rem;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+}
+
+.measurement-stats-page__status,
+.measurement-stats-page__error {
+    max-width: 72rem;
+    margin: 0.5rem auto 0;
+    font-size: 0.9rem;
+}
+
+.measurement-stats-page__error {
+    color: #991b1b;
+}
+
+.measurement-stats__section {
+    background: #fff;
+    border-radius: 8px;
+    padding: 0.75rem 1rem 1rem;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.measurement-stats__h2 {
+    margin: 0 0 0.65rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.measurement-stats__empty {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #64748b;
+}
+
+.measurement-stats__scroll {
+    overflow-x: auto;
+}
+
+.measurement-stats__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+
+.measurement-stats__table th,
+.measurement-stats__table td {
+    border: 1px solid #e2e8f0;
+    padding: 0.35rem 0.45rem;
+    vertical-align: top;
+}
+
+.measurement-stats__table thead th {
+    background: #f1f5f9;
+    font-weight: 600;
+    text-align: left;
+}
+
+.measurement-stats__table .measurement-stats__group {
+    text-align: center;
+    background: #e0e7ef;
+}
+
+.measurement-stats__num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.measurement-stats__table code {
+    font-size: 0.75rem;
+}
