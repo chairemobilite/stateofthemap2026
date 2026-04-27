@@ -365,7 +365,7 @@ The menu is rendered by
 populated by pure URL builders in
 [`mapLinks.ts`](frontend/src/keptBboxes/mapLinks.ts). Every entry is
 shown unconditionally — the user knows their cell better than we do —
-but two things deserve flagging because they're easy to get wrong:
+but three things deserve flagging because they're easy to get wrong:
 
 ## Measurement tool (PR13+)
 
@@ -376,6 +376,26 @@ GeoJSON for saved lines lives in [`focusMeasurementGeoJson.ts`](frontend/src/kep
 See `PoiFocusMap.tsx` for integration and `index.css` for the panel (z-index 6).
 
 **1. China datum offset.** Chinese law requires consumer maps to
+**1. Pano-viewer deeplinks: GSV is the exception, not the rule.**
+Only Google Street View can be deeplinked straight into pano mode
+from a bare lat/lon: `map_action=pano&viewpoint={lat},{lng}` makes
+Google look up the closest panorama server-side. Mapillary, Panoramax
+and KartaView all require a *specific image id* in the URL (`pKey=…`,
+`pic=<uuid>`, `/details/<id>`) to enter their photo viewer — so we
+can only deeplink to the **map** at the click position and let the
+user click the coverage dot. Adding "auto-open closest photo" for
+those three would mean an extra API call per right-click (and an
+access token for Mapillary), which isn't worth the latency for an
+internal tool. Off-coverage clicks just show an empty map.
+
+**2. Panoramax reads URL state from the query string, not the hash.**
+Linking to `panoramax.openstreetmap.fr/#map=…` lands on the marketing
+landing page because the SPA never sees the parameters. The correct
+form is `?focus=map&map=zoom/lat/lon`, which is what the viewer
+itself emits — easy regression to spot after the fact, easy to miss
+from the documentation.
+
+**3. China datum offset.** Chinese law requires consumer maps to
 publish on **GCJ-02** ("Mars datum"), a non-linear ~50–700 m offset
 of WGS84 that's applied by AMap, Tencent, Apple Maps in China, and
 every 天地图-derived basemap. Baidu adds a second obfuscation
@@ -388,7 +408,7 @@ against the `wandergis/coordtransform` Python reference and its
 README example). Reverse conversions are not provided: GCJ-02 is
 one-way by design and we don't need them for the menu.
 
-**2. OSM editor URL is configurable.** The "Edit on OpenStreetMap"
+**4. OSM editor URL is configurable.** The "Edit on OpenStreetMap"
 entry uses a template string read from `OSM_EDITOR_URL` (env var,
 default `https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}`)
 with `{lat}`, `{lon}`, and `{zoom}` placeholders substituted at

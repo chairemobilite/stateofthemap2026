@@ -17,7 +17,13 @@ const MTL: MapPoint = { lat: 45.5017, lon: -73.5673, zoom: 17.42 };
 describe('mapLinks', () => {
     it.each([
         ['mapillary', mapillaryUrl, 'https://www.mapillary.com/app/?lat=45.5017&lng=-73.5673&z=17'],
-        ['panoramax', panoramaxUrl, 'https://panoramax.openstreetmap.fr/#map=17/45.5017/-73.5673'],
+        [
+            'panoramax',
+            panoramaxUrl,
+            // Panoramax reads its state from the *query string* and emits
+            // unencoded slashes in `map=zoom/lat/lon`; we match that exactly.
+            'https://panoramax.openstreetmap.fr/?focus=map&map=17/45.5017/-73.5673',
+        ],
         ['kartaview', kartaViewUrl, 'https://kartaview.org/map/@45.5017,-73.5673,17z'],
         [
             'google street view',
@@ -35,7 +41,7 @@ describe('mapLinks', () => {
         [3.99, 3],
     ])('floors fractional zoom %s to %s in URL builders that take it', (zoom, floored) => {
         expect(mapillaryUrl({ ...MTL, zoom })).toContain(`z=${floored}`);
-        expect(panoramaxUrl({ ...MTL, zoom })).toContain(`#map=${floored}/`);
+        expect(panoramaxUrl({ ...MTL, zoom })).toContain(`map=${floored}/`);
         expect(kartaViewUrl({ ...MTL, zoom })).toContain(`,${floored}z`);
     });
 
