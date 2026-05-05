@@ -54,16 +54,17 @@ describe('<SamplingPanel />', () => {
         expect(screen.getByText('30.0%')).toBeInTheDocument();
     });
 
-    it.each(['keep', 'reject'] as const)(
-        'fires onDecide(%s) when the matching button is clicked',
-        (decision) => {
-            const onDecide = vi.fn();
-            renderPanel({ onDecide });
-            const label = decision === 'keep' ? 'Keep' : 'Reject';
-            fireEvent.click(screen.getByRole('button', { name: label }));
-            expect(onDecide).toHaveBeenCalledExactlyOnceWith(decision);
-        },
-    );
+    it('fires onDecide("keep") when the Keep button is clicked', () => {
+        const onDecide = vi.fn();
+        renderPanel({ onDecide });
+        fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
+        expect(onDecide).toHaveBeenCalledExactlyOnceWith('keep');
+    });
+
+    it('does not surface a Reject button (reject only lives in the focus map)', () => {
+        renderPanel();
+        expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    });
 
     it('fires onSkip when the Skip button is clicked', () => {
         const onSkip = vi.fn();
@@ -94,7 +95,7 @@ describe('<SamplingPanel />', () => {
         expect(screen.getByRole('alert')).toHaveTextContent('backend exploded');
     });
 
-    it.each(['Keep', 'Reject', 'Skip'])(
+    it.each(['Keep', 'Skip'])(
         'disables the %s button while status is loading',
         (label) => {
             renderPanel({ status: 'loading' });
@@ -102,10 +103,9 @@ describe('<SamplingPanel />', () => {
         },
     );
 
-    it('shows an empty-state message and disables Keep/Reject when no bbox is loaded', () => {
+    it('shows an empty-state message and disables Keep when no bbox is loaded', () => {
         renderPanel({ bbox: null as Bbox | null, status: 'loading' });
         expect(screen.getByText('No candidate loaded.')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Keep' })).toBeDisabled();
-        expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
     });
 });
