@@ -93,8 +93,11 @@ export function calculatePathLength(points: LngLatLike[]): number {
     let total = 0;
 
     for (let i = 1; i < points.length; i++) {
-        const prev = new maplibregl.LngLat(points[i - 1][0] as number, points[i - 1][1] as number);
-        const curr = new maplibregl.LngLat(points[i][0] as number, points[i][1] as number);
+        // LngLat.convert is the canonical narrowing for LngLatLike — accepts
+        // tuple, object, or LngLat instance — instead of numeric indexing,
+        // which broke when LngLatLike was widened to a union of shapes.
+        const prev = maplibregl.LngLat.convert(points[i - 1]);
+        const curr = maplibregl.LngLat.convert(points[i]);
         total += prev.distanceTo(curr);
     }
 

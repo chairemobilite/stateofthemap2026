@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { FocusFeatureCollection } from '../api';
 import {
     inferMeasurementStart,
     parseOsmNodeIdFromFeatureId,
@@ -35,26 +36,30 @@ describe('inferMeasurementStart', () => {
     }
 
     const center: [number, number] = [-73.55, 45.55];
-    const entrancesFar = {
-        type: 'FeatureCollection' as const,
+    // Annotate fixtures with FocusFeatureCollection so nested coordinate
+    // arrays are checked as `[number, number][]` tuples instead of being
+    // inferred as widened `number[][]`, which the strict FocusGeometry
+    // shape (api.ts) rejects at the inferMeasurementStart call sites.
+    const entrancesFar: FocusFeatureCollection = {
+        type: 'FeatureCollection',
         features: [
             {
-                type: 'Feature' as const,
+                type: 'Feature',
                 id: 'node/9001',
-                geometry: { type: 'Point' as const, coordinates: [-73.551, 45.551] },
+                geometry: { type: 'Point', coordinates: [-73.551, 45.551] },
                 properties: {},
             },
         ],
     };
 
-    const offsetBuilding = {
-        type: 'FeatureCollection' as const,
+    const offsetBuilding: FocusFeatureCollection = {
+        type: 'FeatureCollection',
         features: [
             {
-                type: 'Feature' as const,
+                type: 'Feature',
                 id: 'way/7001',
                 geometry: {
-                    type: 'Polygon' as const,
+                    type: 'Polygon',
                     coordinates: [
                         [
                             [-73.552, 45.551],
