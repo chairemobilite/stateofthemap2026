@@ -182,21 +182,43 @@ export interface Poi {
     group: string;
 }
 
+/** Why the reviewer flagged this POI as unusable for analysis.
+ *  Mirrors `PoiRejectionReason` in `backend/src/storage.rs`. */
+export type PoiRejectionReason = 'no_imagery' | 'obsolete' | 'other';
+
 /** Matches `PoiPickResponse` in `backend/src/api.rs`. `poi` is `null`
  *  when Overpass ran but matched no feature inside the bbox; absence
- *  of an entry means the pick has not been requested yet. */
+ *  of an entry means the pick has not been requested yet.
+ *
+ *  `completed` and `rejected` are the two terminal reviewer states and
+ *  are mutually exclusive. When both are `false` the pick is "pending".
+ *  `rejected_reason` is non-null iff `rejected` is `true`. */
 export interface PoiPickRecord {
     bbox_id: string;
     poi: Poi | null;
     /** Reviewer flag: show this POI as completed (green) on the overview map. */
     completed: boolean;
+    /** Reviewer flag: POI dropped from the analysis (red/grey marker on the focus map). */
+    rejected: boolean;
+    rejected_reason: PoiRejectionReason | null;
 }
 
 /** Cached pick row merged into `usePoiPicks` state (no `bbox_id` in value). */
 export interface PoiPickEntry {
     poi: Poi | null;
     completed: boolean;
+    rejected: boolean;
+    rejected_reason: PoiRejectionReason | null;
 }
+
+/** Discriminated union of the three reviewer transitions accepted by
+ *  `PATCH /api/bbox/kept/:id/poi_pick`. The wire shape is built by
+ *  [`patchPoiPickDecision`] so callers never craft the JSON body
+ *  manually. Mirrors the backend `PoiPickDecision` enum. */
+export type PoiPickDecision =
+    | { kind: 'completed'; value: boolean }
+    | { kind: 'rejected'; reason: PoiRejectionReason }
+    | { kind: 'unreject' };
 
 const ANALYSES_BASE = '/api/analyses';
 
@@ -215,21 +237,44 @@ export async function pickPoi(
 }
 
 /**
- * `PATCH /api/bbox/kept/:id/poi_pick` — set the reviewer completed flag
- * (green marker on the overview map). Requires an existing `poi_pick` row.
+ * `PATCH /api/bbox/kept/:id/poi_pick` — apply one reviewer transition
+ * to an existing pick. Each `PoiPickDecision` variant projects to the
+ * minimum body the backend validator accepts, which keeps the wire
+ * surface small and the 422 cases trivially exclusive.
+ *
+ * @param bboxId   Kept-bbox id whose pick row is being mutated.
+ * @param decision One of the three accepted transitions.
+ * @param fetchFn  Test seam for injecting a stub fetch.
  */
-export async function patchPoiPickCompleted(
+export async function patchPoiPickDecision(
     bboxId: string,
-    completed: boolean,
+    decision: PoiPickDecision,
     fetchFn: typeof fetch = fetch,
 ): Promise<PoiPickRecord> {
+    const body = decisionToBody(decision);
     return jsonOrThrow<PoiPickRecord>(
         await fetchFn(`${BASE}/kept/${bboxId}/poi_pick`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ completed }),
+            body: JSON.stringify(body),
         }),
     );
+}
+
+/** Project a [`PoiPickDecision`] onto the wire body the backend
+ *  expects. Exported so unit tests can assert the projection without
+ *  re-running the fetch. */
+export function decisionToBody(
+    decision: PoiPickDecision,
+): { completed?: boolean; rejected?: boolean; rejected_reason?: PoiRejectionReason } {
+    switch (decision.kind) {
+        case 'completed':
+            return { completed: decision.value };
+        case 'rejected':
+            return { rejected: true, rejected_reason: decision.reason };
+        case 'unreject':
+            return { rejected: false };
+    }
 }
 
 /** `GET /api/analyses/poi_picks` — every cached POI pick on disk, in

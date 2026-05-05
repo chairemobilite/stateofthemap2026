@@ -8,7 +8,8 @@
 //!  - `circle` markers at the cell centers at `zoom < RECT_MIN_ZOOM`
 //!
 //! On top of those, a separate `poi-markers` layer paints picked POIs
-//! (orange = in progress, green = marked completed) at every zoom.
+//! at every zoom: orange = in progress, green = marked completed,
+//! red = rejected (with a structured reason).
 //!
 //! Clicking a bbox layer opens a MapLibre popup hosting a React root
 //! that renders `<KeptBboxPopup />` — the bbox row plus the
@@ -42,13 +43,16 @@ export interface KeptBboxesMapProps {
     basemapId: BasemapId;
     status: KeptBboxesStatus;
     error: string | null;
-    /** Per-bbox cached POI pick (`poi` + reviewer `completed` flag). */
+    /** Per-bbox cached POI pick (`poi` + reviewer `completed`/`rejected` flags). */
     picks: Record<string, PoiPickEntry>;
     /** Bbox ids currently fetching a pick, so the popup can disable
      *  the button without blocking other rows. */
     picking: Set<string>;
-    /** Bbox ids currently PATCHing the completed flag. */
-    savingPickCompleted: Set<string>;
+    /** Bbox ids currently PATCHing a /poi_pick decision (completed
+     *  toggle from this popup, or reject/unreject from the focus map —
+     *  all share the same Set). Used here only to disable the
+     *  completed checkbox while a save is in flight. */
+    savingPickDecision: Set<string>;
     /** Triggered by the "Pick POI" button inside the popup. */
     onPickPoi: (bboxId: string) => void;
     /** Toggle reviewer completed (green overview marker). */
@@ -144,6 +148,8 @@ function installKeptLayers(
                 'case',
                 ['==', ['get', 'completed'], true],
                 '#16a34a',
+                ['==', ['get', 'rejected'], true],
+                '#dc2626',
                 '#f97316',
             ],
             'circle-opacity': 0.95,
@@ -169,7 +175,7 @@ export function KeptBboxesMap({
     error,
     picks,
     picking,
-    savingPickCompleted,
+    savingPickDecision,
     onPickPoi,
     onSetPickCompleted,
     onOpenFocus,
@@ -189,7 +195,7 @@ export function KeptBboxesMap({
     const onSetPickCompletedRef = useRef(onSetPickCompleted);
     const onOpenFocusRef = useRef(onOpenFocus);
     const openingFocusRef = useRef(openingFocus);
-    const savingCompletedRef = useRef(savingPickCompleted);
+    const savingDecisionRef = useRef(savingPickDecision);
     useEffect(() => {
         keptRef.current = keptBboxes;
     });
@@ -200,7 +206,7 @@ export function KeptBboxesMap({
         pickingRef.current = picking;
     });
     useEffect(() => {
-        savingCompletedRef.current = savingPickCompleted;
+        savingDecisionRef.current = savingPickDecision;
     });
     useEffect(() => {
         onPickPoiRef.current = onPickPoi;
@@ -257,7 +263,7 @@ export function KeptBboxesMap({
                 pickedPoi={entry?.poi}
                 pickCompleted={entry?.completed ?? false}
                 isPicking={pickingRef.current.has(bbox.id)}
-                isSavingPickCompleted={savingCompletedRef.current.has(bbox.id)}
+                isSavingPickDecision={savingDecisionRef.current.has(bbox.id)}
                 onPick={(id) => onPickPoiRef.current(id)}
                 onSetPickCompleted={(id, completed) =>
                     void onSetPickCompletedRef.current(id, completed)
@@ -403,7 +409,7 @@ export function KeptBboxesMap({
         if (!root || !openId) return;
         const bbox = keptBboxes.find((b) => b.id === openId);
         if (bbox) renderPopupBody(root, bbox);
-    }, [picks, picking, savingPickCompleted, openingFocus, keptBboxes, removingKeptBboxId]);
+    }, [picks, picking, savingPickDecision, openingFocus, keptBboxes, removingKeptBboxId]);
 
     return (
         <div className="kept-bboxes-map">

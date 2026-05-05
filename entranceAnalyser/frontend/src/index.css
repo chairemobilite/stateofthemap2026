@@ -822,26 +822,58 @@ body {
     user-select: none;
 }
 
-.poi-focus-map__reject-kept {
+.poi-focus-map__reject-poi {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid #fecaca;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 0.78rem;
+    color: #3f3f46;
+    white-space: nowrap;
+}
+
+.poi-focus-map__reject-poi--rejected {
+    border-color: #dc2626;
+    background: #fef2f2;
+}
+
+.poi-focus-map__reject-poi__legend,
+.poi-focus-map__reject-poi__badge {
+    font-weight: 600;
+    color: #b91c1c;
+}
+
+.poi-focus-map__reject-poi__reason {
+    cursor: pointer;
+    user-select: none;
+}
+
+.poi-focus-map__reject-poi__submit,
+.poi-focus-map__reject-poi__undo {
     border: 1px solid #dc2626;
     border-radius: 4px;
-    padding: 0.2rem 0.55rem;
+    padding: 0.15rem 0.55rem;
     font: inherit;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-weight: 600;
     color: #b91c1c;
     background: #fff;
     cursor: pointer;
-    white-space: nowrap;
 }
 
-.poi-focus-map__reject-kept:hover:not(:disabled) {
+.poi-focus-map__reject-poi__submit:hover:not(:disabled),
+.poi-focus-map__reject-poi__undo:hover:not(:disabled) {
     background: #fef2f2;
 }
 
-.poi-focus-map__reject-kept:disabled {
+.poi-focus-map__reject-poi__submit:disabled,
+.poi-focus-map__reject-poi__undo:disabled {
     opacity: 0.55;
-    cursor: progress;
+    cursor: not-allowed;
 }
 
 .map-context-menu {

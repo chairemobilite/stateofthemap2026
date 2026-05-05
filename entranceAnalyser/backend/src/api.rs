@@ -9,7 +9,7 @@
 //! - `GET  /api/bbox/kept`                   → list every kept bbox
 //! - `DELETE /api/bbox/kept/:id`             → remove one kept bbox (cascades analyses + measurements)
 //! - `POST /api/bbox/kept/:id/poi_pick`      → pick (and cache) one POI in a kept cell
-//! - `PATCH /api/bbox/kept/:id/poi_pick`     → set reviewer `completed` on an existing pick
+//! - `PATCH /api/bbox/kept/:id/poi_pick`     → flip reviewer state (`completed` / `rejected`+reason / unreject)
 //! - `GET  /api/analyses/poi_picks`          → every cached POI pick, by bbox id
 //! - `POST /api/bbox/kept/:id/poi_focus`     → fetch (and cache) buildings + entrances around the picked POI
 //!   (optional `?radius_m=N` & `?refresh=true`; radius defaults to `POI_FOCUS_RADIUS_M`; refresh bypasses cache)
@@ -47,7 +47,7 @@ use crate::overpass::{parse_osm_ref, OverpassClient, OverpassError, OsmType, Poi
 use crate::poi_config::PoiTagConfig;
 use crate::poi_focus::{fetch_focus, PoiFocusResult};
 use crate::sampler::{SampleError, Sampler, Strategy};
-use crate::storage::PgStore;
+use crate::storage::{PgStore, PoiRejectionReason};
 
 /// Public-facing runtime config exposed to the frontend via
 /// `GET /api/config`. Everything in here is safe to ship to clients —
@@ -384,17 +384,71 @@ async fn delete_kept_handler(
 /// One picked POI for a given bbox. `poi` is `null` when Overpass
 /// returned no matching feature for the cell — distinct from "we
 /// haven't picked yet", which would not appear in `/poi_picks` at all.
+///
+/// `completed` and `rejected` are the two terminal reviewer states
+/// (mutually exclusive); when both are `false` the row is "pending".
+/// `rejected_reason` is `Some` iff `rejected` is `true`.
 #[derive(Debug, Serialize)]
 pub struct PoiPickResponse {
     pub bbox_id: Uuid,
     pub poi: Option<Poi>,
     /// Reviewer flag: POI analysis marked done on the overview map (green dot).
     pub completed: bool,
+    /// Reviewer flag: POI dropped from the analysis (e.g. no imagery,
+    /// obsolete tag). Counted in the rejection-rate denominator.
+    pub rejected: bool,
+    pub rejected_reason: Option<PoiRejectionReason>,
 }
 
+/// Wire body for `PATCH /api/bbox/kept/:id/poi_pick`. The handler
+/// turns this loose shape into an internal [`PoiPickDecision`] and
+/// 422s on every invalid combination — see [`PatchPoiPickBody::decision`].
+///
+/// All fields are optional so existing clients that still send
+/// `{ "completed": true|false }` keep working unchanged.
 #[derive(Debug, Deserialize)]
 pub struct PatchPoiPickBody {
-    pub completed: bool,
+    pub completed: Option<bool>,
+    pub rejected: Option<bool>,
+    pub rejected_reason: Option<PoiRejectionReason>,
+}
+
+/// One reviewer transition. The handler only mutates the row along
+/// one of these three paths per request, which keeps the audit story
+/// (and the 422 surface) trivially small.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoiPickDecision {
+    /// Set or clear the `completed` flag (clears any rejection on `true`).
+    Completed(bool),
+    /// Reject the pick with a structured reason (clears `completed`).
+    Reject(PoiRejectionReason),
+    /// Move a previously rejected pick back to pending (does not touch `completed`).
+    Unreject,
+}
+
+impl PatchPoiPickBody {
+    /// Validate the wire body and project it to a single decision.
+    /// Returns the 422 message verbatim so the handler can shape the
+    /// response without re-deriving the rule.
+    fn decision(&self) -> Result<PoiPickDecision, &'static str> {
+        // The order of these arms matters: each accepted shape is
+        // matched exactly first, then the more permissive 422 patterns
+        // catch every remaining inconsistent combination.
+        match (self.completed, self.rejected, self.rejected_reason) {
+            (Some(c), None, None) => Ok(PoiPickDecision::Completed(c)),
+            (None, Some(true), Some(reason)) => Ok(PoiPickDecision::Reject(reason)),
+            (None, Some(false), None) => Ok(PoiPickDecision::Unreject),
+
+            (None, Some(true), None) => Err("`rejected: true` requires `rejected_reason`"),
+            (Some(_), Some(_), _) => {
+                Err("`completed` and `rejected` cannot be set in the same request")
+            }
+            (_, _, Some(_)) => Err("`rejected_reason` is only valid with `rejected: true`"),
+            (None, None, None) => Err(
+                "body must set one of `completed`, `rejected: true` (with `rejected_reason`), or `rejected: false`",
+            ),
+        }
+    }
 }
 
 async fn poi_pick_handler(
@@ -414,6 +468,8 @@ async fn poi_pick_handler(
             bbox_id,
             poi: cached.poi,
             completed: cached.completed,
+            rejected: cached.rejected,
+            rejected_reason: cached.rejected_reason,
         }));
     }
     // Fresh pick: load the bbox so we can bound the Overpass query.
@@ -451,6 +507,8 @@ async fn poi_pick_handler(
         bbox_id,
         poi: chosen,
         completed: false,
+        rejected: false,
+        rejected_reason: None,
     }))
 }
 
@@ -459,27 +517,64 @@ async fn patch_poi_pick_handler(
     Path(bbox_id): Path<Uuid>,
     Json(body): Json<PatchPoiPickBody>,
 ) -> Result<Json<PoiPickResponse>, ApiError> {
-    let Some(payload) = state
+    let decision = body
+        .decision()
+        .map_err(|msg| (StatusCode::UNPROCESSABLE_ENTITY, msg.to_string()))?;
+
+    // Pre-flight: terminal states (completed=true / rejected=true)
+    // require a real picked POI. Reading the row first surfaces the
+    // 404 / 422 cases without a wasted UPDATE round-trip.
+    let current = state
         .store
-        .set_poi_pick_completed(bbox_id, body.completed)
+        .read_poi_pick_payload(bbox_id)
         .await
         .map_err(internal)?
-    else {
-        return Err((
+        .ok_or((
             StatusCode::NOT_FOUND,
             format!("bbox {bbox_id} has no POI pick row — run POST /poi_pick first"),
-        ));
-    };
-    if body.completed && payload.poi.is_none() {
+        ))?;
+    let needs_picked_poi = matches!(
+        decision,
+        PoiPickDecision::Completed(true) | PoiPickDecision::Reject(_)
+    );
+    if needs_picked_poi && current.poi.is_none() {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
-            "cannot mark completed when this cell has no picked POI (empty pick)".to_string(),
+            "cannot mark completed or rejected when this cell has no picked POI (empty pick)"
+                .to_string(),
         ));
     }
+
+    let payload = match decision {
+        PoiPickDecision::Completed(value) => state
+            .store
+            .set_poi_pick_completed(bbox_id, value)
+            .await
+            .map_err(internal)?,
+        PoiPickDecision::Reject(reason) => state
+            .store
+            .set_poi_pick_rejection(bbox_id, Some(reason))
+            .await
+            .map_err(internal)?,
+        PoiPickDecision::Unreject => state
+            .store
+            .set_poi_pick_rejection(bbox_id, None)
+            .await
+            .map_err(internal)?,
+    };
+    // The pre-flight read already proved the row exists; an Ok(None)
+    // here would only happen on a concurrent delete, which we surface
+    // as 404 rather than 500.
+    let payload = payload.ok_or((
+        StatusCode::NOT_FOUND,
+        format!("bbox {bbox_id} POI pick row vanished mid-update"),
+    ))?;
     Ok(Json(PoiPickResponse {
         bbox_id,
         poi: payload.poi,
         completed: payload.completed,
+        rejected: payload.rejected,
+        rejected_reason: payload.rejected_reason,
     }))
 }
 
@@ -498,6 +593,8 @@ async fn poi_picks_handler(
             bbox_id,
             poi: p.poi,
             completed: p.completed,
+            rejected: p.rejected,
+            rejected_reason: p.rejected_reason,
         })
         .collect();
     Ok(Json(PoiPicksResponse { picks }))

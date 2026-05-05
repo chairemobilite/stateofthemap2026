@@ -53,7 +53,11 @@ describe('toCenterCollection', () => {
 describe('toPoiCollection', () => {
     it('returns an empty collection when no picks have resolved to features', () => {
         expect(toPoiCollection({})).toEqual({ type: 'FeatureCollection', features: [] });
-        expect(toPoiCollection({ a: { poi: null, completed: false } })).toEqual({
+        expect(
+            toPoiCollection({
+                a: { poi: null, completed: false, rejected: false, rejected_reason: null },
+            }),
+        ).toEqual({
             type: 'FeatureCollection',
             features: [],
         });
@@ -63,11 +67,20 @@ describe('toPoiCollection', () => {
         const a: PoiPickEntry = {
             poi: makePoi({ osm_type: 'node', osm_id: 1, center: [1, 2], group: 'shops' }),
             completed: false,
+            rejected: false,
+            rejected_reason: null,
         };
-        const b: PoiPickEntry = { poi: null, completed: false };
+        const b: PoiPickEntry = {
+            poi: null,
+            completed: false,
+            rejected: false,
+            rejected_reason: null,
+        };
         const c: PoiPickEntry = {
             poi: makePoi({ osm_type: 'way', osm_id: 99, center: [10, 20], group: 'amenities' }),
             completed: true,
+            rejected: false,
+            rejected_reason: null,
         };
         const fc = toPoiCollection({ a, b, c });
 

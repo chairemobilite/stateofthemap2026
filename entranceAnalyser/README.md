@@ -59,7 +59,7 @@ The HTTP backend serves these endpoints:
 | GET    | `/api/bbox/kept`                            | list every persisted kept bbox                                   |
 | DELETE | `/api/bbox/kept/:id`                        | remove one kept bbox (cascades `analyses` + `poi_focus_measurements`) |
 | POST   | `/api/bbox/kept/:id/poi_pick`               | pick (and cache) one POI inside a kept bbox via Overpass         |
-| PATCH  | `/api/bbox/kept/:id/poi_pick`               | set reviewer `completed` on the cached pick (JSON `completed` bool); `422` if `true` when `poi` is null |
+| PATCH  | `/api/bbox/kept/:id/poi_pick`               | flip the reviewer state of the cached pick. JSON body sets exactly one transition: `{"completed": bool}`, `{"rejected": true, "rejected_reason": "no_imagery"\|"obsolete"\|"other"}`, or `{"rejected": false}` (unreject). `completed` and `rejected` are mutually exclusive; rejecting/completing while `poi` is null returns `422` |
 | GET    | `/api/analyses/poi_picks`                   | list every cached POI pick, in insertion order                   |
 | POST   | `/api/bbox/kept/:id/poi_focus`              | fetch (and cache) buildings + entrances around the picked POI (`?radius_m=`, `?refresh=true`) |
 | GET    | `/api/analyses/poi_focuses`                 | list every cached focus result, in insertion order               |

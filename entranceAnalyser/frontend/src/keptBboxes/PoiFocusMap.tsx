@@ -50,6 +50,7 @@ import type {
     PoiFocusMeasurement,
     PoiFocusMeasurementWriteBody,
     PoiFocusResult,
+    PoiRejectionReason,
 } from '../api';
 import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
 import { MapContextMenu, type MapContextMenuItem } from './MapContextMenu';
@@ -144,14 +145,31 @@ export interface PoiFocusMapProps {
     onDeleteMeasurement: (measureId: string) => Promise<void>;
     /** Reviewer flag from `PATCH /poi_pick` (matches overview map green dot). */
     poiPickCompleted: boolean;
-    /** True while PATCH completed is in flight. */
-    poiPickCompletedSaving?: boolean;
+    /** Reviewer flag from `PATCH /poi_pick` (red marker on the focus map);
+     *  mutually exclusive with `poiPickCompleted` server-side. */
+    poiPickRejected: boolean;
+    /** Reason recorded with the rejection, or `null` when not rejected. */
+    poiPickRejectedReason: PoiRejectionReason | null;
+    /** True while any PATCH /poi_pick decision is in flight for this bbox
+     *  (completed toggle or reject/unreject). */
+    poiPickDecisionSaving?: boolean;
     onSetPoiPickCompleted: (completed: boolean) => void;
-    /** Remove this bbox from kept (parent confirms + `DELETE /kept/:id`). */
-    onRemoveFromKept?: () => void;
-    /** True while DELETE kept is in flight for this map's bbox. */
-    removeFromKeptBusy?: boolean;
+    onSetPoiPickRejected: (reason: PoiRejectionReason) => void;
+    onSetPoiPickUnrejected: () => void;
 }
+
+/** Short labels for the reject-reason radio group + the "Rejected: …" badge. */
+const REJECTION_REASON_LABELS: Record<PoiRejectionReason, string> = {
+    no_imagery: 'No imagery',
+    obsolete: 'Obsolete',
+    other: 'Other',
+};
+
+const REJECTION_REASONS: readonly PoiRejectionReason[] = [
+    'no_imagery',
+    'obsolete',
+    'other',
+];
 
 /** State for the right-click context menu: where to draw it (in
  *  canvas-relative CSS pixels) and which geo-coords to deeplink. */
@@ -263,6 +281,7 @@ function installFocusLayers(
     focus: PoiFocusResult | undefined,
     measure: MeasureLayerInstall,
     poiPickCompleted: boolean,
+    poiPickRejected: boolean,
 ) {
     for (const layer of FOCUS_LAYER_IDS) {
         if (map.getLayer(layer)) map.removeLayer(layer);
@@ -286,7 +305,7 @@ function installFocusLayers(
     map.addSource(RING_SOURCE, { type: 'geojson', data: ring });
     map.addSource(PICKED_SOURCE, {
         type: 'geojson',
-        data: toPickedPoiCollection(pickedPoi, poiPickCompleted),
+        data: toPickedPoiCollection(pickedPoi, poiPickCompleted, poiPickRejected),
     });
 
     if (measure.savedForDisplay.length > 0) {
@@ -374,6 +393,8 @@ function installFocusLayers(
                 'case',
                 ['==', ['get', 'completed'], true],
                 '#16a34a',
+                ['==', ['get', 'rejected'], true],
+                '#dc2626',
                 '#f97316',
             ],
             'circle-opacity': 1,
@@ -509,16 +530,19 @@ export function PoiFocusMap({
     onUpdateMeasurement,
     onDeleteMeasurement,
     poiPickCompleted,
-    poiPickCompletedSaving = false,
+    poiPickRejected,
+    poiPickRejectedReason,
+    poiPickDecisionSaving = false,
     onSetPoiPickCompleted,
-    onRemoveFromKept,
-    removeFromKeptBusy = false,
+    onSetPoiPickRejected,
+    onSetPoiPickUnrejected,
 }: PoiFocusMapProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
     const focusRef = useRef(focus);
     const pickedRef = useRef(pickedPoi);
     const poiPickCompletedRef = useRef(poiPickCompleted);
+    const poiPickRejectedRef = useRef(poiPickRejected);
     const measurementsRef = useRef(measurements);
     const layerInstallRef = useRef<MeasureLayerInstall>({
         savedForDisplay: [],
@@ -558,6 +582,9 @@ export function PoiFocusMap({
     });
     useEffect(() => {
         poiPickCompletedRef.current = poiPickCompleted;
+    });
+    useEffect(() => {
+        poiPickRejectedRef.current = poiPickRejected;
     });
 
     const savedForLayer = useMemo(() => {
@@ -827,6 +854,7 @@ export function PoiFocusMap({
                 focusRef.current,
                 layerInstallRef.current,
                 poiPickCompletedRef.current,
+                poiPickRejectedRef.current,
             );
         });
         map.on('error', (e) => console.error('[MapLibre]', e.error ?? e));
@@ -993,6 +1021,7 @@ export function PoiFocusMap({
                 focus,
                 layerInstallRef.current,
                 poiPickCompleted,
+                poiPickRejected,
             );
             if (!focus) {
                 lastFocusBoundsFitKeyRef.current = '';
@@ -1018,7 +1047,7 @@ export function PoiFocusMap({
         return () => {
             map.off('idle', apply);
         };
-    }, [focus, pickedPoi, savedForLayer, draftPoints.length, poiPickCompleted]);
+    }, [focus, pickedPoi, savedForLayer, draftPoints.length, poiPickCompleted, poiPickRejected]);
 
     /** Keep draft paths in sync when only vertex coordinates change (drag / line snap). */
     useEffect(() => {
@@ -1218,20 +1247,33 @@ export function PoiFocusMap({
                     <input
                         type="checkbox"
                         checked={poiPickCompleted}
-                        disabled={poiPickCompletedSaving}
+                        disabled={poiPickDecisionSaving}
                         onChange={(e) => onSetPoiPickCompleted(e.target.checked)}
                     />{' '}
                     POI completed
                 </label>
-                {onRemoveFromKept && (
-                    <button
-                        type="button"
-                        className="poi-focus-map__reject-kept"
-                        disabled={removeFromKeptBusy}
-                        onClick={() => void onRemoveFromKept()}
-                    >
-                        Remove from kept…
-                    </button>
+                {poiPickRejected ? (
+                    <div className="poi-focus-map__reject-poi poi-focus-map__reject-poi--rejected">
+                        <span className="poi-focus-map__reject-poi__badge">
+                            Rejected
+                            {poiPickRejectedReason
+                                ? `: ${REJECTION_REASON_LABELS[poiPickRejectedReason]}`
+                                : ''}
+                        </span>
+                        <button
+                            type="button"
+                            className="poi-focus-map__reject-poi__undo"
+                            disabled={poiPickDecisionSaving}
+                            onClick={() => onSetPoiPickUnrejected()}
+                        >
+                            Undo
+                        </button>
+                    </div>
+                ) : (
+                    <RejectPoiHeaderForm
+                        disabled={poiPickDecisionSaving}
+                        onReject={onSetPoiPickRejected}
+                    />
                 )}
             </header>
 
@@ -1365,5 +1407,49 @@ export function PoiFocusMap({
                     </p>
                 )}
         </div>
+    );
+}
+
+/** Reject-reason radio + submit button for the focus-map header. Owns
+ *  its own pending selection so it resets on (un)mount when the parent
+ *  flips between rejected and pending — no `useEffect` sync. */
+function RejectPoiHeaderForm({
+    disabled,
+    onReject,
+}: {
+    disabled: boolean;
+    onReject: (reason: PoiRejectionReason) => void;
+}) {
+    const [pendingReason, setPendingReason] = useState<PoiRejectionReason | ''>('');
+    return (
+        <form
+            className="poi-focus-map__reject-poi"
+            onSubmit={(e) => {
+                e.preventDefault();
+                if (pendingReason !== '') onReject(pendingReason);
+            }}
+        >
+            <span className="poi-focus-map__reject-poi__legend">Reject:</span>
+            {REJECTION_REASONS.map((r) => (
+                <label key={r} className="poi-focus-map__reject-poi__reason">
+                    <input
+                        type="radio"
+                        name="poi-focus-reject-reason"
+                        value={r}
+                        checked={pendingReason === r}
+                        disabled={disabled}
+                        onChange={() => setPendingReason(r)}
+                    />{' '}
+                    {REJECTION_REASON_LABELS[r]}
+                </label>
+            ))}
+            <button
+                type="submit"
+                className="poi-focus-map__reject-poi__submit"
+                disabled={pendingReason === '' || disabled}
+            >
+                Reject POI
+            </button>
+        </form>
     );
 }

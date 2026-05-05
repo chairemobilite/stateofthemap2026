@@ -9,7 +9,10 @@
 //!   `record_analysis` is the generic upsert; the typed helpers below
 //!   handle the two analysis steps end to end:
 //!   - `kind='poi_pick'` (`get_kept`, `read_poi_pick`, `read_all_poi_picks`,
-//!     `write_poi_pick`, `set_poi_pick_completed`) — picks one POI per cell.
+//!     `write_poi_pick`, `set_poi_pick_completed`, `set_poi_pick_rejection`)
+//!     — picks one POI per cell. The reviewer can flip the row to one of
+//!     three terminal states: pending (default), completed, or rejected
+//!     with a reason; `completed` and `rejected` are mutually exclusive.
 //!   - `kind='poi_focus'` (`read_poi_focus`, `read_all_poi_focuses`,
 //!     `write_poi_focus`) — caches the buildings + entrances around the
 //!     picked POI.
@@ -210,10 +213,14 @@ impl PgStore {
         bbox_id: Uuid,
         poi: Option<&Poi>,
     ) -> Result<(), sqlx::Error> {
-        // A fresh Overpass pick clears any prior "completed" reviewer flag.
+        // A fresh Overpass pick clears any prior reviewer state (the row
+        // may be re-rolled, so completed/rejected from the old POI no
+        // longer applies).
         let payload = SqlxJson(PoiPickPayload {
             poi: poi.cloned(),
             completed: false,
+            rejected: false,
+            rejected_reason: None,
         });
         sqlx::query(
             "INSERT INTO analyses (bbox_id, kind, value, payload) \
@@ -231,7 +238,9 @@ impl PgStore {
 
     /// Set the reviewer "completed" flag on an existing `poi_pick` row.
     /// Returns `Ok(None)` when no row exists. Preserves `poi`; does not
-    /// create a row.
+    /// create a row. Setting `completed = true` clears any prior
+    /// rejection state so the row stays in a single, well-defined
+    /// terminal state; setting `completed = false` simply unflags.
     pub async fn set_poi_pick_completed(
         &self,
         bbox_id: Uuid,
@@ -241,17 +250,61 @@ impl PgStore {
             return Ok(None);
         };
         payload.completed = completed;
-        let bound = SqlxJson(payload.clone());
+        if completed {
+            payload.rejected = false;
+            payload.rejected_reason = None;
+        }
+        self.write_poi_pick_payload(bbox_id, &payload).await?;
+        Ok(Some(payload))
+    }
+
+    /// Set or clear the reviewer rejection on an existing `poi_pick`
+    /// row. `Some(reason)` flags the POI as rejected (clearing any
+    /// `completed` flag); `None` clears the rejection (and leaves
+    /// `completed` untouched, so the row simply returns to "pending").
+    /// Returns `Ok(None)` when no row exists. Preserves `poi`; does
+    /// not create a row.
+    pub async fn set_poi_pick_rejection(
+        &self,
+        bbox_id: Uuid,
+        reason: Option<PoiRejectionReason>,
+    ) -> Result<Option<PoiPickPayload>, sqlx::Error> {
+        let Some(mut payload) = self.read_poi_pick_payload(bbox_id).await? else {
+            return Ok(None);
+        };
+        match reason {
+            Some(r) => {
+                payload.rejected = true;
+                payload.rejected_reason = Some(r);
+                payload.completed = false;
+            }
+            None => {
+                payload.rejected = false;
+                payload.rejected_reason = None;
+            }
+        }
+        self.write_poi_pick_payload(bbox_id, &payload).await?;
+        Ok(Some(payload))
+    }
+
+    /// Shared write path used by `set_poi_pick_completed` and
+    /// `set_poi_pick_rejection`. Bumps `created_at` so the UI's
+    /// "most-recent-first" ordering still reflects reviewer activity.
+    async fn write_poi_pick_payload(
+        &self,
+        bbox_id: Uuid,
+        payload: &PoiPickPayload,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE analyses SET payload = $1, created_at = now() \
              WHERE bbox_id = $2 AND kind = $3",
         )
-        .bind(bound)
+        .bind(SqlxJson(payload.clone()))
         .bind(bbox_id)
         .bind(POI_PICK_KIND)
         .execute(&self.pool)
         .await?;
-        Ok(Some(payload))
+        Ok(())
     }
 
     /// Read the cached POI-focus result for `bbox_id`, if any.
@@ -557,16 +610,47 @@ impl MeasurementRow {
     }
 }
 
+/// Why the reviewer flagged this POI as unusable for the analysis.
+///
+/// Stays small on purpose: the rejection rate is computed by reason,
+/// so a closed enum keeps the aggregation honest. Free-text notes are
+/// out of scope for now — add a sibling field if a future analyst
+/// needs them. Snake-case on the wire matches the existing
+/// `candidate_source` and measurement enums.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PoiRejectionReason {
+    /// Aerial and street-level imagery do not let the analyst confidently
+    /// locate entrances on the site.
+    NoImagery,
+    /// The OSM tag is no longer accurate (e.g. a closed shop, demolished
+    /// building) so the POI cannot be analysed.
+    Obsolete,
+    /// Catch-all for cases that do not fit `NoImagery` or `Obsolete`.
+    Other,
+}
+
 /// On-disk shape of a `poi_pick` analyses payload. Keeping the wrapper
 /// (rather than serialising `Poi` directly) lets us round-trip
 /// "queried Overpass but matched nothing" as `{ "poi": null }`, which
-/// is distinguishable from a missing row. `completed` defaults to
-/// `false` when deserialising legacy JSON that omitted the field.
+/// is distinguishable from a missing row. `completed`, `rejected` and
+/// `rejected_reason` all default when deserialising legacy JSON that
+/// omitted them, so older rows keep loading as plain pending picks.
+///
+/// Invariants the writers (`set_poi_pick_completed`,
+/// `set_poi_pick_rejection`) maintain and the API re-checks:
+/// * `completed && rejected` is illegal (terminal states are exclusive).
+/// * `rejected` requires `rejected_reason.is_some()`.
+/// * `rejected_reason.is_some()` requires `rejected`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoiPickPayload {
     pub poi: Option<Poi>,
     #[serde(default)]
     pub completed: bool,
+    #[serde(default)]
+    pub rejected: bool,
+    #[serde(default)]
+    pub rejected_reason: Option<PoiRejectionReason>,
 }
 
 /// Flat row shape returned by `sqlx::query_as!` — the PostGIS `geom`
@@ -634,6 +718,46 @@ fn polygon_wkt(b: &Bbox) -> String {
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    /// Legacy `poi_pick` rows persisted before the rejection feature
+    /// only carry `{ poi, completed? }`. They must keep loading with
+    /// the new fields defaulted, otherwise the analyst would lose
+    /// every previously cached pick on deploy.
+    #[test]
+    fn poi_pick_payload_deserialises_legacy_rows_with_defaults() {
+        // Pre-completed-flag shape (PR<8).
+        let oldest: PoiPickPayload =
+            serde_json::from_str(r#"{"poi":null}"#).expect("legacy null pick must parse");
+        assert!(!oldest.completed);
+        assert!(!oldest.rejected);
+        assert!(oldest.rejected_reason.is_none());
+
+        // Pre-rejection shape (PR8..PR13).
+        let pre_reject: PoiPickPayload =
+            serde_json::from_str(r#"{"poi":null,"completed":true}"#)
+                .expect("pre-rejection completed pick must parse");
+        assert!(pre_reject.completed);
+        assert!(!pre_reject.rejected);
+        assert!(pre_reject.rejected_reason.is_none());
+    }
+
+    #[test]
+    fn poi_rejection_reason_serialises_to_snake_case() {
+        // Wire format must stay snake_case so it matches the API
+        // contract documented on PATCH /poi_pick.
+        assert_eq!(
+            serde_json::to_string(&PoiRejectionReason::NoImagery).unwrap(),
+            r#""no_imagery""#,
+        );
+        assert_eq!(
+            serde_json::to_string(&PoiRejectionReason::Obsolete).unwrap(),
+            r#""obsolete""#,
+        );
+        assert_eq!(
+            serde_json::to_string(&PoiRejectionReason::Other).unwrap(),
+            r#""other""#,
+        );
+    }
 
     #[test]
     fn polygon_wkt_closes_the_ring() {

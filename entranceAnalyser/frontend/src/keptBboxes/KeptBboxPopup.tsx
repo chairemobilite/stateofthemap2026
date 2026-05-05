@@ -21,8 +21,8 @@ export interface KeptBboxPopupProps {
     pickCompleted: boolean;
     /** True while this bbox's pick is in flight. */
     isPicking: boolean;
-    /** True while PATCH completed is in flight. */
-    isSavingPickCompleted?: boolean;
+    /** True while any PATCH /poi_pick decision (completed/reject/unreject) is in flight. */
+    isSavingPickDecision?: boolean;
     onPick: (bboxId: string) => void;
     /** Toggle completed; omitted in surfaces that don't persist it. */
     onSetPickCompleted?: (bboxId: string, completed: boolean) => void;
@@ -62,7 +62,7 @@ export function KeptBboxPopup({
     pickedPoi,
     pickCompleted,
     isPicking,
-    isSavingPickCompleted = false,
+    isSavingPickDecision = false,
     onPick,
     onSetPickCompleted,
     onOpenFocus,
@@ -81,7 +81,7 @@ export function KeptBboxPopup({
                 pickedPoi={pickedPoi}
                 pickCompleted={pickCompleted}
                 isPicking={isPicking}
-                isSavingPickCompleted={isSavingPickCompleted}
+                isSavingPickDecision={isSavingPickDecision}
                 onPick={onPick}
                 onSetPickCompleted={onSetPickCompleted}
                 onOpenFocus={onOpenFocus}
