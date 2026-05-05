@@ -78,7 +78,6 @@ groups:
         - man_made=observatory
         - man_made=obelisk
         - man_made=paifang
-        - man_made=pier
         - man_made=quay
         - man_made=stupa
         - man_made=telescope
