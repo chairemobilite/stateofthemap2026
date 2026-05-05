@@ -25,6 +25,7 @@ use entrance_analyser_backend::{
     storage::PgStore,
 };
 use http_body_util::BodyExt;
+use rstest::rstest;
 use serde_json::{json, Value as JsonValue};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -154,7 +155,18 @@ async fn pick_poi(app: &axum::Router, bbox_id: Uuid) -> (StatusCode, JsonValue) 
 }
 
 async fn patch_poi_pick(app: &axum::Router, bbox_id: Uuid, completed: bool) -> (StatusCode, JsonValue) {
-    let payload = serde_json::to_vec(&json!({ "completed": completed })).unwrap();
+    patch_poi_pick_body(app, bbox_id, json!({ "completed": completed })).await
+}
+
+/// Send an arbitrary JSON body to `PATCH /api/bbox/kept/:id/poi_pick`.
+/// Used by the parametric tests so each row can exercise a specific
+/// wire shape (legal or 422) without rebuilding the request scaffolding.
+async fn patch_poi_pick_body(
+    app: &axum::Router,
+    bbox_id: Uuid,
+    body: JsonValue,
+) -> (StatusCode, JsonValue) {
+    let payload = serde_json::to_vec(&body).unwrap();
     let resp = app
         .clone()
         .oneshot(
@@ -496,6 +508,180 @@ async fn poi_picks_endpoint_returns_every_cached_pick() {
             "/poi_picks missing bbox {id}; got {returned_ids:?}",
         );
     }
+
+    db.cleanup().await.ok();
+}
+
+/// Stand up a router + Postgres + wiremock instance with one kept
+/// bbox already holding a non-null cached pick. The reviewer can then
+/// PATCH it through any state. The returned `MockServer` must stay
+/// alive for the test (it owns the server task).
+async fn setup_pending_picked(
+) -> Option<(common::TestDb, axum::Router, Uuid, MockServer)> {
+    let db = common::pg_or_skip().await?;
+    let overpass = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(overpass_body(json!([
+            {"type": "node", "id": 42, "lat": 45.5, "lon": -73.5, "tags": {"shop": "bakery"}},
+        ]))))
+        .mount(&overpass)
+        .await;
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let (bbox_id, _) = keep_one_bbox(&app).await;
+    let (st, _) = pick_poi(&app, bbox_id).await;
+    assert_eq!(st, StatusCode::OK);
+    Some((db, app, bbox_id, overpass))
+}
+
+/// Walks the full reviewer state machine on a single bbox. One DB +
+/// one Overpass mock for every transition, so each step is also
+/// asserted against `/poi_picks` for round-trip parity. Cheaper than
+/// one parametric test per transition (each rstest case would respin
+/// Postgres) and easier to read top-to-bottom.
+#[tokio::test]
+async fn legal_decision_transitions_walk_the_state_machine() {
+    let Some((db, app, bbox_id, _overpass)) = setup_pending_picked().await else {
+        return;
+    };
+    // Each row: (PATCH body, expected completed, expected rejected,
+    // expected reason or "").
+    let steps: &[(JsonValue, bool, bool, &str)] = &[
+        // pending → completed
+        (json!({"completed": true}), true, false, ""),
+        // completed → pending (un-complete)
+        (json!({"completed": false}), false, false, ""),
+        // pending → rejected (no_imagery)
+        (json!({"rejected": true, "rejected_reason": "no_imagery"}), false, true, "no_imagery"),
+        // rejected → rejected with a different reason
+        (json!({"rejected": true, "rejected_reason": "obsolete"}), false, true, "obsolete"),
+        // rejected → completed (must clear the rejection)
+        (json!({"completed": true}), true, false, ""),
+        // completed → rejected (must clear the completion)
+        (json!({"rejected": true, "rejected_reason": "other"}), false, true, "other"),
+        // rejected → unreject (back to pending)
+        (json!({"rejected": false}), false, false, ""),
+        // pending → unreject again (no-op, allowed)
+        (json!({"rejected": false}), false, false, ""),
+    ];
+    for (i, (body, exp_completed, exp_rejected, exp_reason)) in steps.iter().enumerate() {
+        let (st, resp) = patch_poi_pick_body(&app, bbox_id, body.clone()).await;
+        assert_eq!(st, StatusCode::OK, "step {i}: body = {body}; got = {resp}");
+        assert_eq!(resp["completed"].as_bool(), Some(*exp_completed), "step {i}");
+        assert_eq!(resp["rejected"].as_bool(), Some(*exp_rejected), "step {i}");
+        if exp_reason.is_empty() {
+            assert!(resp["rejected_reason"].is_null(), "step {i}: {resp}");
+        } else {
+            assert_eq!(
+                resp["rejected_reason"].as_str(),
+                Some(*exp_reason),
+                "step {i}",
+            );
+        }
+    }
+    db.cleanup().await.ok();
+}
+
+/// Each row exercises one illegal body shape and asserts the API
+/// returns 422 without mutating the row. Run against a freshly picked
+/// (pending) row so the only failure mode under test is the body
+/// validator, not the underlying state.
+#[rstest]
+// Both terminal states in one body.
+#[case::completed_and_rejected(json!({"completed": true, "rejected": true, "rejected_reason": "obsolete"}))]
+#[case::completed_and_unreject(json!({"completed": false, "rejected": false}))]
+// Rejection with no reason.
+#[case::reject_without_reason(json!({"rejected": true}))]
+// Reason without `rejected: true`.
+#[case::reason_without_reject(json!({"rejected_reason": "no_imagery"}))]
+#[case::reason_with_unreject(json!({"rejected": false, "rejected_reason": "obsolete"}))]
+#[case::reason_with_completed(json!({"completed": true, "rejected_reason": "obsolete"}))]
+// Empty body.
+#[case::empty(json!({}))]
+#[tokio::test]
+async fn invalid_decision_bodies_return_422(#[case] body: JsonValue) {
+    let Some((db, app, bbox_id, _overpass)) = setup_pending_picked().await else {
+        return;
+    };
+    let (st, resp) = patch_poi_pick_body(&app, bbox_id, body.clone()).await;
+    assert_eq!(
+        st,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "body {body} should be rejected; got status={st} body={resp}",
+    );
+    // The pick must remain pending (untouched by the failed PATCH).
+    let (st_get, get_body) = pick_poi(&app, bbox_id).await;
+    assert_eq!(st_get, StatusCode::OK);
+    assert_eq!(get_body["completed"].as_bool(), Some(false));
+    assert_eq!(get_body["rejected"].as_bool(), Some(false));
+    assert!(get_body["rejected_reason"].is_null());
+    db.cleanup().await.ok();
+}
+
+/// Terminal verdicts (`completed: true`, `rejected: true`) require a
+/// real picked POI. Empty cells (where the POI is null) must 422 just
+/// like the existing `completed:true` rule does — otherwise the
+/// rejection-rate denominator would silently include cells that
+/// Overpass simply found nothing in.
+#[rstest]
+#[case::reject_no_imagery(json!({"rejected": true, "rejected_reason": "no_imagery"}))]
+#[case::reject_obsolete(json!({"rejected": true, "rejected_reason": "obsolete"}))]
+#[case::reject_other(json!({"rejected": true, "rejected_reason": "other"}))]
+#[tokio::test]
+async fn reject_on_null_pick_returns_422(#[case] body: JsonValue) {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let overpass = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(overpass_body(json!([]))))
+        .mount(&overpass)
+        .await;
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let (bbox_id, _) = keep_one_bbox(&app).await;
+    pick_poi(&app, bbox_id).await; // caches null pick
+
+    let (st, _) = patch_poi_pick_body(&app, bbox_id, body).await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+
+    db.cleanup().await.ok();
+}
+
+/// Unrejecting (rejected: false) must work even when there is no
+/// picked POI — it can only ever revert state, never enter a
+/// terminal one.
+#[tokio::test]
+async fn unreject_on_null_pick_is_a_noop_200() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let overpass = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(overpass_body(json!([]))))
+        .mount(&overpass)
+        .await;
+    seed_one_cell(&db.pool, 45.5, -73.5).await;
+    let app = build_router(
+        db.pool.clone(),
+        format!("{}/api/interpreter", overpass.uri()),
+    )
+    .await;
+    let (bbox_id, _) = keep_one_bbox(&app).await;
+    pick_poi(&app, bbox_id).await;
+
+    let (st, body) = patch_poi_pick_body(&app, bbox_id, json!({"rejected": false})).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["rejected"].as_bool(), Some(false));
+    assert!(body["rejected_reason"].is_null());
 
     db.cleanup().await.ok();
 }

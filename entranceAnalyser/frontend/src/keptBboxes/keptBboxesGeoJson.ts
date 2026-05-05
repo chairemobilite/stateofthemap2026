@@ -42,7 +42,8 @@ export function toCenterCollection(keptBboxes: KeptBbox[]): FeatureCollection<Po
  * Build a `FeatureCollection` of picked POI centers, one per non-null
  * entry in `picks`. Skips bboxes with `null` poi (queried but empty) and
  * missing keys (no row yet) so the marker layer paints only real
- * features. `properties.completed` drives orange vs green on the map.
+ * features. The `completed` and `rejected` flags drive the marker
+ * colour on the overview map (green / red / orange respectively).
  * `properties.bbox_id` lets click handlers look up the host bbox.
  */
 export function toPoiCollection(picks: Record<string, PoiPickEntry>): FeatureCollection<Point> {
@@ -58,6 +59,7 @@ export function toPoiCollection(picks: Record<string, PoiPickEntry>): FeatureCol
                 osm_id: poi.osm_id,
                 group: poi.group,
                 completed: entry.completed,
+                rejected: entry.rejected,
             },
             geometry: { type: 'Point', coordinates: poi.center },
         });

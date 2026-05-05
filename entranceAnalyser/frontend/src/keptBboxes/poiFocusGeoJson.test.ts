@@ -102,6 +102,20 @@ describe('poiFocusGeoJson', () => {
         expect(out.features[0].properties).toMatchObject({ completed: true });
     });
 
+    it.each<[boolean, boolean]>([
+        [false, false],
+        [true, false],
+        [false, true],
+    ])(
+        'toPickedPoiCollection projects completed=%s rejected=%s onto the feature',
+        (completed, rejected) => {
+            const poi = makePoi();
+            const props = toPickedPoiCollection(poi, completed, rejected).features[0]
+                .properties;
+            expect(props).toMatchObject({ completed, rejected });
+        },
+    );
+
     it.each([
         [16, 16],
         [32, 32],

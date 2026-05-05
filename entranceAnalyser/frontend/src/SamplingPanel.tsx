@@ -1,7 +1,14 @@
-//! Sidebar panel: summary of the current candidate bbox + Keep/Reject/Skip.
+//! Sidebar panel: summary of the current candidate bbox + Keep/Skip.
 //!
 //! Pure presentational component driven by `useSampling`'s output so the
 //! UI can be unit-tested without the API or the map.
+//!
+//! "Reject" is intentionally not exposed here: at sampling time the
+//! reviewer has not seen the picked POI yet, so a cell-level reject
+//! would be premature. The reject decision lives further downstream in
+//! the focus-map view (`PoiFocusMap`), where the imagery is loaded
+//! and rejecting also cascades a `DELETE` of the bbox to keep the
+//! random sample pure.
 
 import type { Bbox, Decision, Strategy } from './api';
 import { StrategySelector } from './StrategySelector';
@@ -92,9 +99,6 @@ export function SamplingPanel({
             <div className="sampling-panel__actions">
                 <button type="button" onClick={() => onDecide('keep')} disabled={!bbox || busy}>
                     Keep
-                </button>
-                <button type="button" onClick={() => onDecide('reject')} disabled={!bbox || busy}>
-                    Reject
                 </button>
                 <button type="button" onClick={onSkip} disabled={busy}>
                     Skip

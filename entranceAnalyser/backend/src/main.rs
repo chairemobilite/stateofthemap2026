@@ -43,11 +43,21 @@ const DEFAULT_POI_FOCUS_RADIUS_M: u32 = 150;
 /// URL template used to open the OSM editor at a clicked map
 /// location when `OSM_EDITOR_URL` is unset. Defaults to the iD
 /// editor on osm.org with the standard `#map=zoom/lat/lon` hash that
-/// every osm.org permalink uses. Operators running a self-hosted iD
-/// fork (or RapiD, JOSM remote control, etc.) should override this
-/// with the appropriate template — `{lat}` / `{lon}` / `{zoom}`
-/// placeholders are substituted client-side at click time.
-const DEFAULT_OSM_EDITOR_URL: &str = "https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}";
+/// every osm.org permalink uses.
+///
+/// Zoom is baked in at **20** — iD's comfortable editing level for
+/// buildings, entrances, and other small POIs. The focus map itself
+/// caps zoom at 19 (see `PoiFocusMap`'s `fitBounds` `maxZoom`), so
+/// forwarding the click zoom would land the editor one level too far
+/// out for the entrance-mapping workflow. Operators who want the
+/// click zoom forwarded instead can set `OSM_EDITOR_URL` to a
+/// template containing the `{zoom}` placeholder.
+///
+/// Operators running a self-hosted iD fork (or RapiD, JOSM remote
+/// control, etc.) should override this with the appropriate template
+/// — `{lat}` / `{lon}` / `{zoom}` placeholders are substituted
+/// client-side at click time.
+const DEFAULT_OSM_EDITOR_URL: &str = "https://www.openstreetmap.org/edit#map=20/{lat}/{lon}";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

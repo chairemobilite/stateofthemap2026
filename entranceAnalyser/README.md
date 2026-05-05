@@ -59,7 +59,7 @@ The HTTP backend serves these endpoints:
 | GET    | `/api/bbox/kept`                            | list every persisted kept bbox                                   |
 | DELETE | `/api/bbox/kept/:id`                        | remove one kept bbox (cascades `analyses` + `poi_focus_measurements`) |
 | POST   | `/api/bbox/kept/:id/poi_pick`               | pick (and cache) one POI inside a kept bbox via Overpass         |
-| PATCH  | `/api/bbox/kept/:id/poi_pick`               | set reviewer `completed` on the cached pick (JSON `completed` bool); `422` if `true` when `poi` is null |
+| PATCH  | `/api/bbox/kept/:id/poi_pick`               | flip the reviewer state of the cached pick. JSON body sets exactly one transition: `{"completed": bool}`, `{"rejected": true, "rejected_reason": "no_imagery"\|"obsolete"\|"other"}`, or `{"rejected": false}` (unreject). `completed` and `rejected` are mutually exclusive; rejecting/completing while `poi` is null returns `422` |
 | GET    | `/api/analyses/poi_picks`                   | list every cached POI pick, in insertion order                   |
 | POST   | `/api/bbox/kept/:id/poi_focus`              | fetch (and cache) buildings + entrances around the picked POI (`?radius_m=`, `?refresh=true`) |
 | GET    | `/api/analyses/poi_focuses`                 | list every cached focus result, in insertion order               |
@@ -410,10 +410,13 @@ one-way by design and we don't need them for the menu.
 
 **4. OSM editor URL is configurable.** The "Edit on OpenStreetMap"
 entry uses a template string read from `OSM_EDITOR_URL` (env var,
-default `https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}`)
-with `{lat}`, `{lon}`, and `{zoom}` placeholders substituted at
-click time. Override the env var to swap iD for JOSM remote
-control, RapiD, ID-mapcomplete, etc.:
+default `https://www.openstreetmap.org/edit#map=20/{lat}/{lon}` —
+zoom is baked in at 20, iD's comfortable editing level for buildings
+and entrances) with `{lat}`, `{lon}`, and `{zoom}` placeholders
+substituted at click time. Include `{zoom}` in a custom template
+to forward the focus-map click zoom instead of using a fixed value.
+Override the env var to swap iD for JOSM remote control, RapiD,
+ID-mapcomplete, etc.:
 
 ```env
 # JOSM remote control (edit a 50 m × 50 m box around the click)

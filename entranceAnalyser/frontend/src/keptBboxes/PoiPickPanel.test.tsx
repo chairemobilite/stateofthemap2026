@@ -122,4 +122,24 @@ describe('<PoiPickPanel />', () => {
         fireEvent.click(box);
         expect(onSetPickCompleted).toHaveBeenCalledExactlyOnceWith('bbox-1', true);
     });
+
+    it('disables the completed checkbox while a pick decision is in flight', () => {
+        renderPanel({
+            pickedPoi: makePoi(),
+            pickCompleted: false,
+            isSavingPickDecision: true,
+            onSetPickCompleted: vi.fn(),
+        });
+        const box = screen.getByRole('checkbox', { name: /mark poi completed/i });
+        expect((box as HTMLInputElement).disabled).toBe(true);
+    });
+
+    it('does not surface any Reject affordance (reject lives only on the focus map)', () => {
+        renderPanel({
+            pickedPoi: makePoi(),
+            onSetPickCompleted: vi.fn(),
+        });
+        expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    });
 });

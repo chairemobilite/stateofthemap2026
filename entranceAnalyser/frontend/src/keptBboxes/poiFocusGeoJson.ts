@@ -172,8 +172,18 @@ export function toBuildingCentroidsCollection(focus: PoiFocusResult): FeatureCol
  * Picked POI centre as a single-feature collection so MapLibre can
  * paint it on the focus map with its own colour. Properties echo
  * `osm_type` / `osm_id` / `group` for click-through inspection.
+ *
+ * `pickCompleted` and `pickRejected` are mutually exclusive (the
+ * server enforces this) and drive the marker colour:
+ *   - `completed = true`  → green
+ *   - `rejected  = true`  → red (POI flagged as unusable)
+ *   - otherwise           → orange (pending)
  */
-export function toPickedPoiCollection(poi: Poi, pickCompleted = false): FeatureCollection<Point> {
+export function toPickedPoiCollection(
+    poi: Poi,
+    pickCompleted = false,
+    pickRejected = false,
+): FeatureCollection<Point> {
     return {
         type: 'FeatureCollection',
         features: [
@@ -185,6 +195,7 @@ export function toPickedPoiCollection(poi: Poi, pickCompleted = false): FeatureC
                     osm_id: poi.osm_id,
                     group: poi.group,
                     completed: pickCompleted,
+                    rejected: pickRejected,
                 },
                 geometry: { type: 'Point', coordinates: poi.center },
             },

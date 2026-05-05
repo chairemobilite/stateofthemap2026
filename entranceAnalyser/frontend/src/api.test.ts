@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
     fetchAppConfig,
+    decisionToBody,
     deleteKept,
     fetchKept,
     fetchPoiFocuses,
@@ -11,13 +12,15 @@ import {
     fetchBboxAtCustomOsm,
     fetchRandomBbox,
     pickPoi,
-    patchPoiPickCompleted,
+    patchPoiPickDecision,
     pickPoiFocus,
     submitDecision,
     type AppConfig,
     type KeptBbox,
     type Poi,
     type PoiFocusResult,
+    type PoiPickDecision,
+    type PoiRejectionReason,
 } from './api';
 import { makeBbox } from './test/fixtures';
 
@@ -126,6 +129,8 @@ describe('api client', () => {
             bbox_id: SAMPLE_BBOX.id,
             poi: SAMPLE_POI,
             completed: false,
+            rejected: false,
+            rejected_reason: null,
         });
         const reply = await pickPoi(SAMPLE_BBOX.id, fetchFn);
         expect(fetchFn).toHaveBeenCalledTimes(1);
@@ -136,6 +141,8 @@ describe('api client', () => {
             bbox_id: SAMPLE_BBOX.id,
             poi: SAMPLE_POI,
             completed: false,
+            rejected: false,
+            rejected_reason: null,
         });
     });
 
@@ -145,34 +152,85 @@ describe('api client', () => {
     ] as const)(
         'pickPoi returns a %s payload verbatim',
         async (_label, poi) => {
-            const fetchFn = jsonFetch({ bbox_id: SAMPLE_BBOX.id, poi, completed: false });
+            const fetchFn = jsonFetch({
+                bbox_id: SAMPLE_BBOX.id,
+                poi,
+                completed: false,
+                rejected: false,
+                rejected_reason: null,
+            });
             const reply = await pickPoi(SAMPLE_BBOX.id, fetchFn);
             expect(reply.poi).toEqual(poi);
         },
     );
 
-    it('patchPoiPickCompleted PATCHes /poi_pick with JSON body', async () => {
+    // Each row: a `PoiPickDecision` and the JSON body the wire format
+    // must carry. Catches accidental drift between the discriminated
+    // union and the backend `PATCH /poi_pick` contract.
+    it.each<[string, PoiPickDecision, Record<string, unknown>]>([
+        ['completed=true', { kind: 'completed', value: true }, { completed: true }],
+        ['completed=false', { kind: 'completed', value: false }, { completed: false }],
+        [
+            'rejected/no_imagery',
+            { kind: 'rejected', reason: 'no_imagery' },
+            { rejected: true, rejected_reason: 'no_imagery' },
+        ],
+        [
+            'rejected/obsolete',
+            { kind: 'rejected', reason: 'obsolete' },
+            { rejected: true, rejected_reason: 'obsolete' },
+        ],
+        [
+            'rejected/other',
+            { kind: 'rejected', reason: 'other' },
+            { rejected: true, rejected_reason: 'other' },
+        ],
+        ['unreject', { kind: 'unreject' }, { rejected: false }],
+    ])('decisionToBody projects %s onto the wire shape', (_label, decision, body) => {
+        expect(decisionToBody(decision)).toEqual(body);
+    });
+
+    it('patchPoiPickDecision PATCHes /poi_pick using decisionToBody', async () => {
         const fetchFn = jsonFetch({
             bbox_id: SAMPLE_BBOX.id,
             poi: SAMPLE_POI,
-            completed: true,
+            completed: false,
+            rejected: true,
+            rejected_reason: 'no_imagery',
         });
-        const reply = await patchPoiPickCompleted(SAMPLE_BBOX.id, true, fetchFn);
+        const reason: PoiRejectionReason = 'no_imagery';
+        const reply = await patchPoiPickDecision(
+            SAMPLE_BBOX.id,
+            { kind: 'rejected', reason },
+            fetchFn,
+        );
         expect(fetchFn).toHaveBeenCalledTimes(1);
         const [url, init] = fetchFn.mock.calls[0];
         expect(url).toBe(`/api/bbox/kept/${SAMPLE_BBOX.id}/poi_pick`);
         expect(init.method).toBe('PATCH');
-        expect(JSON.parse(init.body)).toEqual({ completed: true });
-        expect(reply.completed).toBe(true);
+        expect(JSON.parse(init.body)).toEqual({
+            rejected: true,
+            rejected_reason: 'no_imagery',
+        });
+        expect(reply.rejected).toBe(true);
+        expect(reply.rejected_reason).toBe('no_imagery');
     });
 
     it('fetchPoiPicks unwraps the { picks } envelope', async () => {
         const picks = [
-            { bbox_id: SAMPLE_BBOX.id, poi: SAMPLE_POI, completed: false },
+            {
+                bbox_id: SAMPLE_BBOX.id,
+                poi: SAMPLE_POI,
+                completed: false,
+                rejected: false,
+                rejected_reason: null,
+            },
             {
                 bbox_id: '00000000-0000-0000-0000-000000000002',
                 poi: null,
                 completed: false,
+                rejected: false,
+                rejected_reason: null,
             },
         ];
         const fetchFn = jsonFetch({ picks });

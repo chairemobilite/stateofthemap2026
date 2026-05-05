@@ -9,6 +9,12 @@
 //!    When `poi === null` the cell was queried but matched nothing,
 //!    so we surface "No POI in this cell" instead of feature details.
 //!
+//! When a real POI is picked, a "POI completed" checkbox lets the
+//! reviewer flip the overview marker to green. Reject is intentionally
+//! not exposed here: the reviewer needs the imagery context of the
+//! focus map (`PoiFocusMap`) to decide whether a POI is unmappable,
+//! so the reject affordance lives there only.
+//!
 //! Pure presentational: lifecycle (`isPicking`, `pickedPoi`) and the
 //! click handler are passed in, so the parent (`KeptBboxesMap`) keeps
 //! ownership of the pick state via `usePoiPicks`.
@@ -24,8 +30,9 @@ export interface PoiPickPanelProps {
     pickCompleted: boolean;
     /** True while this specific bbox's pick request is in flight. */
     isPicking: boolean;
-    /** True while PATCH `completed` is in flight. */
-    isSavingPickCompleted?: boolean;
+    /** True while any PATCH /poi_pick decision (completed toggle,
+     *  reject from focus map, unreject) is in flight for this bbox. */
+    isSavingPickDecision?: boolean;
     onPick: (bboxId: string) => void;
     /** Toggle overview "completed" state; only shown when a real POI exists. */
     onSetPickCompleted?: (bboxId: string, completed: boolean) => void;
@@ -68,7 +75,7 @@ export function PoiPickPanel({
     pickedPoi,
     pickCompleted,
     isPicking,
-    isSavingPickCompleted = false,
+    isSavingPickDecision = false,
     onPick,
     onSetPickCompleted,
     onOpenFocus,
@@ -149,7 +156,7 @@ export function PoiPickPanel({
                     <input
                         type="checkbox"
                         checked={pickCompleted}
-                        disabled={isSavingPickCompleted}
+                        disabled={isSavingPickDecision}
                         onChange={(e) => onSetPickCompleted(bboxId, e.target.checked)}
                     />{' '}
                     Mark POI completed (green on overview map)
