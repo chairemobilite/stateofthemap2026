@@ -33,30 +33,48 @@ function intZoom(zoom: number): number {
 
 /**
  * Mapillary web app, deeplinked to the click position. The viewer
- * automatically opens the closest available image when the user
- * clicks the highlighted dot.
+ * lands at `lat/lng/z` and renders coverage dots; the user picks the
+ * dot they want to inspect.
  *
- * Mapillary uses `lng` (not `lon`) and floats are accepted at full
- * precision.
+ * We can't deeplink straight into the photo viewer without a `pKey`
+ * (image id), which would require a Graph-API lookup with an access
+ * token. Until we have one, "land at the map and click the dot" is
+ * the honest UX.
+ *
+ * Mapillary uses `lng` (not `lon`) and accepts floats at full precision.
  */
 export function mapillaryUrl({ lat, lon, zoom }: MapPoint): string {
     return `https://www.mapillary.com/app/?lat=${lat}&lng=${lon}&z=${intZoom(zoom)}`;
 }
 
 /**
- * Panoramax (OSM-France instance). The viewer uses MapLibre's hash
- * format (`#map=zoom/lat/lon`) for the map position; the global
- * federation portal at `api.panoramax.xyz` accepts the same hash but
- * the OSM-FR mirror is the more relevant default for this project.
+ * Panoramax (OSM-France instance). The Panoramax SPA reads its map
+ * state from the *query string*, not the URL hash — passing
+ * `#map=…` lands on the marketing landing page because the SPA
+ * never sees the parameters. We use `?focus=map&map=zoom/lat/lon`
+ * to match the format the viewer itself emits.
+ *
+ * Like Mapillary, true pano-viewer deeplinks need a `pic=<uuid>`
+ * parameter, which we don't have without a separate API call.
  */
 export function panoramaxUrl({ lat, lon, zoom }: MapPoint): string {
-    return `https://panoramax.openstreetmap.fr/#map=${intZoom(zoom)}/${lat}/${lon}`;
+    // Panoramax emits unencoded slashes in `map=zoom/lat/lon` — match
+    // its own format verbatim rather than letting URLSearchParams
+    // percent-encode them, even though both forms parse identically.
+    return `https://panoramax.openstreetmap.fr/?focus=map&map=${intZoom(zoom)}/${lat}/${lon}`;
 }
 
 /**
  * KartaView (formerly OpenStreetView). The map page uses the
  * `@lat,lon,zoomz` suffix on `/map`, mirroring the iD/RapiD style
- * permalinks.
+ * permalinks. The viewer renders coverage tracks and lets the user
+ * click into the photo viewer.
+ *
+ * KartaView's photo viewer lives at `/details/<sequence>/<photo>`
+ * and there is no documented URL parameter to auto-open the closest
+ * photo from a lat/lon — we'd need an API lookup, same as Mapillary.
+ * Without that, opening the map at the location is the best we can
+ * do; off-coverage clicks just show an empty map.
  */
 export function kartaViewUrl({ lat, lon, zoom }: MapPoint): string {
     return `https://kartaview.org/map/@${lat},${lon},${intZoom(zoom)}z`;
