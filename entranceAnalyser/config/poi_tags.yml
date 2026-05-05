@@ -144,20 +144,31 @@ groups:
         - building=water_tower
         - building=windmill
 
-# Features matching any `groups` entry but also matching an expression
+# Features matching any `groups` entry but also matching an exception
 # below should be treated as non-POIs (e.g. `amenity=*` minus street
-# furniture). Same `key=value` syntax as groups.
+# furniture).
+#
+# Two supported shapes per entry:
+#   - `key=value` — single-tag predicate (the original schema).
+#   - `all: [<expr>, <expr>, ...]` — *conjunction*; fires only when
+#     the feature carries every listed tag. Used for narrow
+#     exclusions where neither leg alone should drop the feature
+#     (e.g. private swimming pools — we still want public pools and
+#     other private leisure features in the sample).
 #
 # Two-layer enforcement:
-#   1. `overpass::build_query` attaches every exception sharing a
-#      group line's key as a `!=` negation, so excluded features
-#      never come back over the wire (e.g. `nwr["amenity"]
+#   1. `overpass::build_query` attaches every **single-tag** exception
+#      sharing a group line's key as a `!=` negation, so excluded
+#      features never come back over the wire (e.g. `nwr["amenity"]
 #      ["amenity"!="bench"]["amenity"!="bbq"]...`). A wildcard
 #      exception (`key=*`) drops the whole group line for that key.
-#   2. `PoiTagConfig::group_for_tags` re-checks the exceptions
+#      Conjunctive (`all:`) exceptions are NOT pushed into the QL —
+#      Overpass cannot express `NOT (a AND b)` on a single `nwr`
+#      filter, so the safety net carries the load.
+#   2. `PoiTagConfig::group_for_tags` re-checks every exception
 #      client-side as a safety net, so the picker still drops any
 #      feature that slips through (mirror lag, alternate Overpass
-#      mirror behaviour, future schema changes).
+#      mirror behaviour, future schema changes, conjunctive cases).
 #
 # Rationale: drop curbside / micro / marker features and things that are not
 # “destinations in themselves” (viewpoints, a tent pitch inside a campsite,
@@ -177,6 +188,7 @@ exceptions:
     - amenity=dog_toilet
     - amenity=drinking_water
     - amenity=dressing_room
+    - amenity=fountain
     - amenity=grit_bin
     - amenity=hunting_stand
     - amenity=hydrant
@@ -217,6 +229,14 @@ exceptions:
     - leisure=picnic_table
     - leisure=slipway
     - leisure=swimming_area
+    # Private swimming pools (residential, hotel, club): the entrance
+    # cannot be mapped from public imagery and they aren't a "place
+    # the public goes to". Public pools (`leisure=swimming_pool`
+    # alone, or with `access=yes/permissive/customers`) stay in the
+    # sample.
+    - all:
+        - leisure=swimming_pool
+        - access=private
     - shop=no
     - shop=vacant
     - shop=yes

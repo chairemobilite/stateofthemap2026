@@ -3,27 +3,40 @@
 //! The YAML shape is one top-level `groups` map (where each entry
 //! names a semantic category and lists raw OSM tag expressions in
 //! `key=value` form, with `*` matching any value) plus an optional
-//! top-level `exceptions` list of the same expression syntax. A
-//! feature is a POI when it matches at least one group expression
-//! **and** matches no exception. Parsing happens once at load time so
-//! the hot path ([`PoiTagConfig::group_for_tags`]) is pure lookup.
+//! top-level `exceptions` list. A feature is a POI when it matches
+//! at least one group expression **and** matches no exception.
+//! Parsing happens once at load time so the hot path
+//! ([`PoiTagConfig::group_for_tags`]) is pure lookup.
 //!
-//! Exceptions are also consumed by `overpass::build_query`, which
-//! turns them into per-line `!=` negations on the QL so excluded
-//! features never come back from Overpass. The client-side
-//! [`PoiTagConfig::group_for_tags`] still applies as a safety net
+//! Each exception is **either**:
+//!  - a single `key=value` string — fires when the feature carries
+//!    that tag, OR
+//!  - an `all: [<expr>, ...]` list (a *conjunction*) — fires only
+//!    when the feature carries **every** listed tag. Used for narrow
+//!    exclusions like "private swimming pools" that would over-exclude
+//!    if expressed as either single tag alone.
+//!
+//! Single-tag exceptions are also consumed by `overpass::build_query`,
+//! which turns them into per-line `!=` negations on the QL so
+//! excluded features never come back from Overpass. Conjunctive
+//! (`all:`) exceptions are intentionally **not** pushed to the QL —
+//! Overpass cannot express `NOT (a AND b)` on a single `nwr` filter
+//! and splitting the line would over-complicate the builder for the
+//! handful of conjunctive cases we need. The client-side
+//! [`PoiTagConfig::group_for_tags`] re-checks every exception type
 //! and stays the canonical contract.
 //!
 //! ```yaml
 //! groups:
 //!     shops:
 //!         - shop=*
-//!     public_transport:
-//!         - highway=bus_stop
-//!         - railway=tram_stop
+//!     leisure:
+//!         - leisure=*
 //! exceptions:
-//!     - shop=vacant
-//!     - shop=no
+//!     - shop=vacant                        # single-tag
+//!     - all:                                # conjunction
+//!         - leisure=swimming_pool
+//!         - access=private
 //! ```
 
 use std::collections::BTreeMap;
@@ -86,16 +99,47 @@ impl TagExpr {
     }
 }
 
+/// One exception entry from `exceptions:`. Either a single tag
+/// predicate (back-compat with the original schema) or a conjunction
+/// of tag predicates that all have to match for the exception to fire.
+///
+/// Public so `overpass::build_query` can route on the variant — only
+/// `Single` exceptions translate to QL `!=` filters; `All` is enforced
+/// client-side via [`PoiTagConfig::group_for_tags`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Exception {
+    /// Drop the feature when this single tag matches. Mirrors the
+    /// pre-`Exception`-enum behaviour exactly.
+    Single(TagExpr),
+    /// Drop the feature only when **every** listed tag matches.
+    /// Empty list is rejected at parse time — an empty conjunction
+    /// would silently drop every feature.
+    All(Vec<TagExpr>),
+}
+
+impl Exception {
+    /// `true` when `tags` triggers this exception.
+    /// Single → the predicate matches. `All` → every predicate matches.
+    pub fn matches(&self, tags: &BTreeMap<String, String>) -> bool {
+        match self {
+            Self::Single(e) => e.matches(tags),
+            // De Morgan reminder: this is "drop iff feature has all
+            // listed tags", not "drop iff missing any listed tag".
+            Self::All(exprs) => exprs.iter().all(|e| e.matches(tags)),
+        }
+    }
+}
+
 /// Parsed `poi_tags.yml` content. Ordering of groups matches the YAML
 /// file (via `IndexMap`) so callers that iterate groups get a stable,
 /// human-friendly ordering without sorting.
 #[derive(Debug, Clone)]
 pub struct PoiTagConfig {
     pub groups: IndexMap<String, Vec<TagExpr>>,
-    /// Tag expressions that disqualify a feature from being a POI even
-    /// when it matched a group. Empty when the YAML omits the
-    /// `exceptions:` section.
-    pub exceptions: Vec<TagExpr>,
+    /// Predicates that disqualify a feature from being a POI even when
+    /// it matched a group. Empty when the YAML omits the `exceptions:`
+    /// section. See [`Exception`] for the two supported shapes.
+    pub exceptions: Vec<Exception>,
 }
 
 impl PoiTagConfig {
@@ -127,6 +171,7 @@ impl PoiTagConfig {
                 path: path.clone(),
                 source,
             },
+            ParseError::EmptyConjunction => ConfigError::EmptyConjunction { path: path.clone() },
         })
     }
 
@@ -150,9 +195,10 @@ impl PoiTagConfig {
             })?;
             groups.insert(name, parsed);
         }
-        let exceptions: Result<Vec<_>, _> =
-            raw.exceptions.iter().map(|s| TagExpr::parse(s)).collect();
-        let exceptions = exceptions.map_err(|source| ParseError::BadException { source })?;
+        let mut exceptions = Vec::with_capacity(raw.exceptions.len());
+        for raw_exc in raw.exceptions {
+            exceptions.push(parse_raw_exception(raw_exc)?);
+        }
         Ok(PoiTagConfig { groups, exceptions })
     }
 
@@ -173,8 +219,8 @@ impl PoiTagConfig {
         None
     }
 
-    /// `true` when at least one expression in `exceptions` matches
-    /// `tags`. Public so callers can distinguish "not a POI" (no group
+    /// `true` when at least one entry in `exceptions` matches `tags`.
+    /// Public so callers can distinguish "not a POI" (no group
     /// matched) from "explicitly excluded" if they ever need the
     /// difference.
     pub fn is_exception(&self, tags: &BTreeMap<String, String>) -> bool {
@@ -182,11 +228,50 @@ impl PoiTagConfig {
     }
 }
 
+/// Parse one entry from the YAML `exceptions:` list. Accepts either
+/// a bare `key=value` string (single-tag predicate) or an `all: [...]`
+/// object whose list members are themselves `key=value` strings
+/// (conjunction; all must match).
+///
+/// An empty `all:` list is rejected — silently dropping every feature
+/// is never the operator's intent and almost always means a typo.
+fn parse_raw_exception(raw: RawException) -> Result<Exception, ParseError> {
+    match raw {
+        RawException::Single(s) => TagExpr::parse(&s)
+            .map(Exception::Single)
+            .map_err(|source| ParseError::BadException { source }),
+        RawException::All { all } => {
+            if all.is_empty() {
+                return Err(ParseError::EmptyConjunction);
+            }
+            let mut exprs = Vec::with_capacity(all.len());
+            for s in &all {
+                let expr = TagExpr::parse(s).map_err(|source| ParseError::BadException { source })?;
+                exprs.push(expr);
+            }
+            Ok(Exception::All(exprs))
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     groups: IndexMap<String, Vec<String>>,
     #[serde(default)]
-    exceptions: Vec<String>,
+    exceptions: Vec<RawException>,
+}
+
+/// YAML-side shape of one `exceptions:` entry. `untagged` lets the
+/// parser pick the variant from the literal shape — a scalar string
+/// is `Single`, a mapping with key `all` is the conjunctive form.
+/// Any other shape (e.g. a top-level mapping with the wrong key)
+/// surfaces as a `serde_yaml` error rather than silently parsing as
+/// the wrong variant, because both variants have a fixed structure.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawException {
+    Single(String),
+    All { all: Vec<String> },
 }
 
 /// Context-free parse failure; surfaced wrapped by [`ConfigError`]
@@ -205,6 +290,9 @@ pub enum ParseError {
     BadException {
         source: BadExpression,
     },
+    /// `exceptions:` had a `- all: []` entry. Empty conjunctions match
+    /// every feature, which is never what the operator intended.
+    EmptyConjunction,
 }
 
 /// Single malformed expression (`shop` without `=`, empty value, etc).
@@ -260,6 +348,9 @@ pub enum ConfigError {
         path: PathBuf,
         source: BadExpression,
     },
+    EmptyConjunction {
+        path: PathBuf,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -281,6 +372,10 @@ impl std::fmt::Display for ConfigError {
             Self::BadException { path, source } => {
                 write!(f, "bad expression in `exceptions` ({path:?}): {source}")
             }
+            Self::EmptyConjunction { path } => write!(
+                f,
+                "`all: []` in `exceptions:` of {path:?} has no entries (would match every feature)",
+            ),
         }
     }
 }
@@ -368,6 +463,14 @@ groups:
         "groups:\n    shops:\n        - shop=*\nexceptions:\n    - not-a-tag-expr",
         "BadException"
     )]
+    #[case(
+        "groups:\n    shops:\n        - shop=*\nexceptions:\n    - all:\n        - not-a-tag-expr",
+        "BadException"
+    )]
+    #[case(
+        "groups:\n    shops:\n        - shop=*\nexceptions:\n    - all: []",
+        "EmptyConjunction"
+    )]
     fn rejects_invalid_yaml(#[case] body: &str, #[case] variant: &str) {
         let err = PoiTagConfig::from_yaml_str(body).unwrap_err();
         let label = match err {
@@ -375,6 +478,7 @@ groups:
             ParseError::EmptyGroup { .. } => "EmptyGroup",
             ParseError::Bad { .. } => "Bad",
             ParseError::BadException { .. } => "BadException",
+            ParseError::EmptyConjunction => "EmptyConjunction",
             ParseError::Yaml(_) => "Yaml",
         };
         assert_eq!(label, variant);
@@ -401,6 +505,15 @@ groups:
         assert_eq!(cfg.group_for_tags(&tags), None);
     }
 
+    /// Pluck the `TagExpr` out of a `Single` variant; tests that don't
+    /// care about the conjunctive shape stay readable this way.
+    fn unwrap_single(exc: &Exception) -> &TagExpr {
+        match exc {
+            Exception::Single(e) => e,
+            other => panic!("expected Single, got {other:?}"),
+        }
+    }
+
     #[test]
     fn parses_exceptions_list() {
         let cfg = PoiTagConfig::from_yaml_str(
@@ -415,10 +528,68 @@ exceptions:
         )
         .unwrap();
         assert_eq!(cfg.exceptions.len(), 2);
-        assert_eq!(cfg.exceptions[0].key, "shop");
-        assert_eq!(cfg.exceptions[0].value.as_deref(), Some("vacant"));
-        assert_eq!(cfg.exceptions[1].key, "amenity");
-        assert_eq!(cfg.exceptions[1].value.as_deref(), Some("bench"));
+        let first = unwrap_single(&cfg.exceptions[0]);
+        assert_eq!(first.key, "shop");
+        assert_eq!(first.value.as_deref(), Some("vacant"));
+        let second = unwrap_single(&cfg.exceptions[1]);
+        assert_eq!(second.key, "amenity");
+        assert_eq!(second.value.as_deref(), Some("bench"));
+    }
+
+    #[test]
+    fn parses_conjunctive_exception() {
+        let cfg = PoiTagConfig::from_yaml_str(
+            r#"
+groups:
+    leisure:
+        - leisure=*
+exceptions:
+    - all:
+        - leisure=swimming_pool
+        - access=private
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.exceptions.len(), 1);
+        match &cfg.exceptions[0] {
+            Exception::All(exprs) => {
+                assert_eq!(exprs.len(), 2);
+                assert_eq!(exprs[0].key, "leisure");
+                assert_eq!(exprs[0].value.as_deref(), Some("swimming_pool"));
+                assert_eq!(exprs[1].key, "access");
+                assert_eq!(exprs[1].value.as_deref(), Some("private"));
+            }
+            other => panic!("expected All, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    // Public swimming pool — group matches, conjunction does NOT (no access tag).
+    #[case(&[("leisure", "swimming_pool")], Some("leisure"))]
+    // Public swimming pool with a non-private access value — also kept.
+    #[case(&[("leisure", "swimming_pool"), ("access", "yes")], Some("leisure"))]
+    // Private swimming pool — both legs of the conjunction match, drop.
+    #[case(&[("leisure", "swimming_pool"), ("access", "private")], None)]
+    // Private *non*-pool leisure — first leg fails, kept (the
+    // conjunction must NOT collapse to "drop all private leisure").
+    #[case(&[("leisure", "garden"), ("access", "private")], Some("leisure"))]
+    fn conjunctive_exception_drops_only_when_all_legs_match(
+        #[case] pairs: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let cfg = PoiTagConfig::from_yaml_str(
+            r#"
+groups:
+    leisure:
+        - leisure=*
+exceptions:
+    - all:
+        - leisure=swimming_pool
+        - access=private
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.group_for_tags(&tags_from(pairs)), expected);
     }
 
     #[test]
@@ -480,16 +651,20 @@ exceptions:
         let cfg = PoiTagConfig::load_from_path(&path)
             .unwrap_or_else(|e| panic!("shipped YAML {path:?} must parse: {e}"));
         assert!(!cfg.groups.is_empty(), "shipped YAML declared no groups");
-        // Every shipped exception must be drop-only (i.e. it must not
-        // also be one of the group's exact expressions, because that
-        // would make the group entry dead code). Cheap invariant for
-        // catching authoring mistakes during YAML edits.
+        // Every shipped single-tag exception must be drop-only (i.e.
+        // it must not also be one of the group's exact expressions,
+        // because that would make the group entry dead code).
+        // Conjunctive exceptions are exempt — by construction they're
+        // strictly more specific than any single group expression.
+        // Cheap invariant for catching authoring mistakes during YAML
+        // edits.
         for exc in &cfg.exceptions {
+            let Exception::Single(exc_expr) = exc else { continue };
             for exprs in cfg.groups.values() {
-                let conflict = exprs.iter().any(|g| g == exc);
+                let conflict = exprs.iter().any(|g| g == exc_expr);
                 assert!(
                     !conflict,
-                    "exception {exc:?} duplicates a group expression — \
+                    "exception {exc_expr:?} duplicates a group expression — \
                      either drop the exception or remove it from the group",
                 );
             }

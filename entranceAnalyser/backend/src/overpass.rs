@@ -20,7 +20,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::bbox::Bbox;
-use crate::poi_config::PoiTagConfig;
+use crate::poi_config::{Exception, PoiTagConfig};
 
 /// OSM feature kind. Mirrors the three values Overpass emits in the
 /// `type` field.
@@ -204,16 +204,24 @@ impl OverpassClient {
 
 /// Build the Overpass QL query for one bbox and every group in
 /// `config`. Each group expression becomes one `nwr[...]` line; any
-/// exception sharing the line's key is appended as a `!=` negation
-/// so vacant storefronts, benches, and the rest of the
-/// `exceptions:` list never travel back over the wire. Public so
-/// tests can assert on the output without a network round-trip.
+/// **single-tag** exception sharing the line's key is appended as a
+/// `!=` negation so vacant storefronts, benches, and the rest of the
+/// flat `exceptions:` list never travel back over the wire. Public
+/// so tests can assert on the output without a network round-trip.
 ///
 /// A wildcard exception on a key (`amenity=*`) drops every group
 /// line that filters on that same key — the line would be empty by
-/// construction, and Overpass rejects `[key!=*]` syntax. The
-/// post-fetch [`PoiTagConfig::group_for_tags`] still applies as a
-/// safety net for any feature that slips through.
+/// construction, and Overpass rejects `[key!=*]` syntax.
+///
+/// **Conjunctive (`all:`) exceptions are intentionally NOT pushed
+/// into the QL.** Overpass cannot express `NOT (a AND b)` on a
+/// single `nwr` filter — every `[...]` clause is AND'd. Splitting the
+/// affected group line into a union of two filtered lines would work
+/// but adds enough builder complexity that the savings (a handful of
+/// extra elements over the wire for the rare conjunctive case) are
+/// not worth it. The post-fetch [`PoiTagConfig::group_for_tags`]
+/// safety net catches them client-side, where the predicate is
+/// trivial.
 pub fn build_query(bbox: &Bbox, config: &PoiTagConfig) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -236,12 +244,13 @@ pub fn build_query(bbox: &Bbox, config: &PoiTagConfig) -> String {
                 Some(v) => format!("nwr[{:?}={:?}]", expr.key, v),
             };
             for exc in &config.exceptions {
-                if exc.key != expr.key {
+                let Exception::Single(exc_expr) = exc else { continue };
+                if exc_expr.key != expr.key {
                     continue;
                 }
-                match &exc.value {
+                match &exc_expr.value {
                     None => continue 'lines,
-                    Some(v) => write!(&mut line, "[{:?}!={:?}]", exc.key, v).unwrap(),
+                    Some(v) => write!(&mut line, "[{:?}!={:?}]", exc_expr.key, v).unwrap(),
                 }
             }
             writeln!(&mut out, "    {line};").unwrap();
@@ -463,6 +472,22 @@ mod tests {
     }
 
     #[test]
+    fn query_omits_conjunctive_exceptions_from_ql() {
+        // Conjunctive exceptions (e.g. private swimming pools) are
+        // enforced client-side; the QL must not pick them up — both
+        // because Overpass can't express `NOT (a AND b)` on a single
+        // `nwr` filter and because emitting a half-baked `[access!=
+        // private]` filter on the leisure line would over-exclude
+        // every private leisure feature, not just pools.
+        let cfg = sample_config(
+            "groups:\n    leisure:\n        - leisure=*\n\
+             exceptions:\n    - all:\n        - leisure=swimming_pool\n        - access=private\n",
+        );
+        let lines = group_lines(&build_query(&sample_bbox(), &cfg));
+        assert_eq!(lines, vec!["nwr[\"leisure\"]"]);
+    }
+
+    #[test]
     fn query_does_not_attach_exception_to_unrelated_group_line() {
         // A `craft=*` group with `amenity=bench` exceptions must not
         // pick up the bench negation -- exceptions are scoped to
@@ -555,6 +580,35 @@ mod tests {
         let pois = client.fetch_pois(&sample_bbox(), &cfg).await.unwrap();
         assert_eq!(pois.len(), 1, "vacant storefront must be dropped");
         assert_eq!(pois[0].osm_id, 10);
+    }
+
+    #[tokio::test]
+    async fn drops_elements_matching_a_conjunctive_exception_client_side() {
+        // The QL doesn't filter conjunctive exceptions (see
+        // `query_omits_conjunctive_exceptions_from_ql`), so Overpass
+        // happily returns the private pool. The client-side
+        // `group_for_tags` safety net must drop it; the public pool
+        // must survive.
+        let server = MockServer::start().await;
+        let body = make_response(serde_json::json!([
+            {"type": "node", "id": 100, "lat": 45.55, "lon": -73.55,
+             "tags": {"leisure": "swimming_pool", "access": "private"}},
+            {"type": "node", "id": 101, "lat": 45.56, "lon": -73.55,
+             "tags": {"leisure": "swimming_pool"}},
+        ]));
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let cfg = sample_config(
+            "groups:\n    leisure:\n        - leisure=*\n\
+             exceptions:\n    - all:\n        - leisure=swimming_pool\n        - access=private\n",
+        );
+        let client = OverpassClient::new(format!("{}/api/interpreter", server.uri()));
+        let pois = client.fetch_pois(&sample_bbox(), &cfg).await.unwrap();
+        assert_eq!(pois.len(), 1, "private pool must be dropped");
+        assert_eq!(pois[0].osm_id, 101);
     }
 
     #[tokio::test]
