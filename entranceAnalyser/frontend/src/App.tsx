@@ -19,8 +19,10 @@ import { useSampling } from './useSampling';
 /** Fallback OSM editor URL used while the backend config is still
  *  loading or if the request fails. Mirrors `DEFAULT_OSM_EDITOR_URL`
  *  in the backend so the frontend behaviour is identical to a fresh
- *  install with no `OSM_EDITOR_URL` env var set. */
-const FALLBACK_OSM_EDITOR_URL = 'https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}';
+ *  install with no `OSM_EDITOR_URL` env var set. Zoom is baked in
+ *  at 20 (iD's entrance-editing level); see the backend constant's
+ *  doc comment for the rationale. */
+const FALLBACK_OSM_EDITOR_URL = 'https://www.openstreetmap.org/edit#map=20/{lat}/{lon}';
 
 type AppView = 'sampling' | 'kept' | 'focus' | 'stats';
 

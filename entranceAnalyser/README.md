@@ -410,10 +410,13 @@ one-way by design and we don't need them for the menu.
 
 **4. OSM editor URL is configurable.** The "Edit on OpenStreetMap"
 entry uses a template string read from `OSM_EDITOR_URL` (env var,
-default `https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}`)
-with `{lat}`, `{lon}`, and `{zoom}` placeholders substituted at
-click time. Override the env var to swap iD for JOSM remote
-control, RapiD, ID-mapcomplete, etc.:
+default `https://www.openstreetmap.org/edit#map=20/{lat}/{lon}` —
+zoom is baked in at 20, iD's comfortable editing level for buildings
+and entrances) with `{lat}`, `{lon}`, and `{zoom}` placeholders
+substituted at click time. Include `{zoom}` in a custom template
+to forward the focus-map click zoom instead of using a fixed value.
+Override the env var to swap iD for JOSM remote control, RapiD,
+ID-mapcomplete, etc.:
 
 ```env
 # JOSM remote control (edit a 50 m × 50 m box around the click)
