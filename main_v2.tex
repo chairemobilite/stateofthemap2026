@@ -1,8 +1,12 @@
 \documentclass{article}
-\usepackage{graphicx} % Required for inserting images
+\usepackage[utf8]{inputenc} % Accept raw UTF-8 (é, è, à, ç, …) in the source
+\usepackage[T1]{fontenc}    % Render and encode accents as single glyphs (clean PDF copy-paste)
+\usepackage{graphicx}       % Required for inserting images
+\usepackage{url}            % Typeset the repository URL cleanly
+\usepackage[round]{natbib}  % Author-year bibliography style (matches in-text format)
 
-\title{From centroid to entrance: a global assessment of POIs access locations for accessibility}
-\author{Pierre-Leo Bourbonnais, Yannick Brosseau, Catherine Morency (Polytechnique Montreal)}
+\title{From centroid to entrance: a global assessment of POI access locations for accessibility}
+\author{Pierre-Léo Bourbonnais, Yannick Brosseau, Catherine Morency (Polytechnique Montréal)}
 \date{April 2026}
 
 \begin{document}
@@ -40,29 +44,29 @@ A growing literature characterises the completeness and
 positional accuracy of OSM buildings and POIs (Haklay, 2010;
 Girres \& Touya, 2010; Fan et al., 2014; Herfort et al., 2023;
 Klinkhardt et al., 2023) and shows that entrance-level detail
-changes transit catchments (Guti\'errez \& Garc\'ia-Palomares,
+changes transit catchments (Gutiérrez \& García-Palomares,
 2008; El-Geneidy et al., 2014), wheelchair routing (Neis \&
 Zielstra, 2014), and curbside outcomes for autonomous vehicles
 (Hunter et al., 2024; Wang et al., 2025). The \texttt{entrance=*}
 tag itself remains a blind spot: Hu et al.\ (2021) found only
 \(\approx\)60 tagged buildings in their entire London extract.
 Our prior work (Bourbonnais et al., 2026) validated 1{,}034 POIs
-from five Qu\'ebec household travel surveys and observed median
+from five Québec household travel surveys and observed median
 positional errors around 20\,m across OSM, Overture Maps, the
-Qu\'ebec Property Registry and Google Places, with long tails
+Québec Property Registry and Google Places, with long tails
 dominated by university campuses and hospital complexes; it
 explicitly flagged the centroid-vs-entrance comparison as open.
 To our knowledge, no study yet quantifies \texttt{entrance=*}
 coverage at scale, nor the cost of substituting a centroid for
-an entrance. We quantify that gap against field-surveyed
-ground-truth entrances, and show how entrances can be mapped to
-support walking, cycling, transit and autonomous-vehicle use
-cases.
+an entrance. We quantify that gap on a worldwide random sample
+of POIs by comparing centroid baselines to the nearest tagged
+entrance, and show how entrances can be mapped to support
+walking, cycling, transit and autonomous-vehicle use cases.
 
 \section{Methodology}
 
-The study combines a global exploratory analysis with a local
-case study. POIs are coded along four axes: building footprint
+The study is a global exploratory analysis. POIs are coded
+along four axes: building footprint
 present or not; single- vs.\ multi-building site;
 \texttt{entrance=*} present or not; and specificity of the
 entrance tag (values other than \texttt{yes}). Coverage extends
@@ -93,10 +97,11 @@ available, architectural or wayfinding plans. A non-trivial share
 of randomly selected POIs are rejected at this stage---most often
 because aerial and street-level imagery do not let the analyst
 confidently locate entrances, or because the underlying tag is
-obsolete (e.g.\ a closed shop). Where a footprint exists, three
-centroid baselines are compared against each OSM entrance: parcel
-centroid, main-building centroid, and the centroid of all
-buildings on the site.
+obsolete (e.g.\ a closed shop). Four centroid baselines are
+compared against each OSM entrance: parcel, main-building, and
+all-buildings centroids where a footprint exists, and the
+area-polygon centroid for sites without a unique footprint
+(campuses, factory areas, sport pitches).
 
 \paragraph{Distance metrics and persisted measurements.} The
 analyst draws a polyline on the focus map---a single Euclidean
@@ -109,21 +114,22 @@ and walking/cycling/driving network combinations) and
 \emph{entrance class} (\texttt{main}, \texttt{customers},
 \texttt{home}, \texttt{emergency}, service-employees,
 service-delivery, \texttt{garage}, or one of four centroid
-baselines: parcel, main-building, all-buildings, or area). The
-first vertex is independently auto-classified---POI-focus
-centroid, OSM \texttt{entrance=*} node, building centroid, or
-unsnapped---against the same focus-map snap layers, so intended
-and detected anchors can be cross-checked.
+baselines: parcel, main-building, all-buildings, or area).
 
-\paragraph{Local validation in Qu\'ebec.} An in-depth analysis
-covers \(\approx\)100 Qu\'ebec POIs whose entrances were
-field-surveyed and contributed to OSM by the Chaire Mobilit\'e
-team; these serve as the ground-truth reference against which
-each centroid baseline is measured. The pipeline is a Rust/Axum
+\paragraph{Pipeline and OSM contributions.} The pipeline is a Rust
 backend over PostgreSQL/PostGIS, fed by Overpass for OSM
 features, with a React/MapLibre review interface; all code, the
-sampled POI list, reference entrances, and computed metrics are
-released under an open licence.
+sampled POI list and computed metrics are
+released under an open licence. OSM edits made during the
+analysis to add missing entrances and pedestrian-access
+geometry (footpaths and connecting paths) for the selected POIs
+carry the \texttt{\#StateOfTheMap2026} and
+\texttt{\#EntranceAnalysis} hashtags in their changeset
+comments, so every contribution is traceable. Repository:
+\url{https://github.com/chairemobilite/stateofthemap2026}
+(translations, drafting and parts of the pipeline were assisted by Anthropic
+Claude Opus 4.6 and 4.7; all data, methods and
+findings remain the authors').
 
 \section{Review interface}
 
@@ -174,13 +180,23 @@ not yet started).}
 
 Across the 25 paired observations, 24 are positive (single
 $-$8\,m exception). The pooled difference is $+$16\,m median,
-$+$80\,m max for distacne to nearest road network ($n=$15); $+$37\,m
+$+$80\,m max for distance to nearest road network ($n=$15); $+$37\,m
 median, $+$92\,m max for distance to nearest transit stop ($n=$10).
 
 \textbf{These are preliminary figures from a small random draw,
 not final results.} The full paper will combine a substantially
 larger random sample, a targeted pass on large multi-building
-and area-coded sites, and the regional Qu\'ebec field-validated
+and area-coded sites, and the regional Québec field-validated
 analysis, all through the same pipeline.
+
+% In-text citations are still typeset manually in author-year form;
+% \nocite forces the bibliography to print the Part 1 entries listed
+% in bibliography.bib so they appear in the PDF.
+\bibliographystyle{plainnat}
+\nocite{Bourbonnais2026, Herfort2023, Hu2021, Klinkhardt2023,
+        Haklay2010, Girres2010, Fan2014, Moradi2023,
+        Gutierrez2008, Biba2010, ElGeneidy2014, Neis2014,
+        Hunter2024, Wang2025}
+\bibliography{bibliography}
 
 \end{document}
