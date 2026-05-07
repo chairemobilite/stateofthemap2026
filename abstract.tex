@@ -1,0 +1,20 @@
+\begin{abstract}
+    Transport models routinely anchor points of interest (POIs) at
+    the centroid of their building or parcel. On large multi-building
+    sites---university campuses, hospitals, malls, industrial
+    parks---this can misrepresent pedestrian access by hundreds of
+    metres, distorting first-/last-mile transit access, wheelchair
+    routing, and curbside drop-off precision for emerging autonomous
+    fleets. We quantify how explicit \texttt{entrance=*} detail in
+    OpenStreetMap (OSM) shifts accessibility-style metrics relative
+    to centroid proxies. The study
+    combines a global, population/built-volume-weighted random sample
+    with a Qu\'ebec validation against street-level imagery,
+    authoritative registers, and field-surveyed entrances. We release
+    the full toolchain---a Rust/React sampling and review service
+    over Overpass and PostGIS, with a MapLibre interface that
+    persists typed geodesic measurements between POI / entrance /
+    centroid anchors and the nearest transit, walking, cycling,
+    parking, and driving targets---together with the tabulated
+    outputs.
+\end{abstract}
