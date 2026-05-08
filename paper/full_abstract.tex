@@ -6,7 +6,8 @@
 \usepackage[round]{natbib}  % Author-year bibliography style (matches in-text format)
 
 \title{From centroid to entrance: a global assessment of POI access locations for accessibility}
-\author{Pierre-Léo Bourbonnais, Yannick Brosseau, Catherine Morency (Polytechnique Montréal)}
+\author{Pierre-Léo Bourbonnais, Yannick Brosseau, Catherine Morency \\
+        Polytechnique Montréal}
 \date{April 2026}
 
 \begin{document}
@@ -55,7 +56,8 @@ from five Québec household travel surveys and observed median
 positional errors around 20\,m across OSM, Overture Maps, the
 Québec Property Registry and Google Places, with long tails
 dominated by university campuses and hospital complexes; it
-explicitly flagged the centroid-vs-entrance comparison as open.
+explicitly flagged the centroid-vs-entrance comparison as a 
+future research question.
 To our knowledge, no study yet quantifies \texttt{entrance=*}
 coverage at scale, nor the cost of substituting a centroid for
 an entrance. We quantify that gap on a worldwide random sample
@@ -76,8 +78,9 @@ sport pitches---where the area polygon itself supplies the
 centroid baseline.
 
 \paragraph{Two complementary sampling strategies.} A global pass
-tessellates the world into $10\times10$\,km cells over GHS-POP
-and GHS-BUILT-V (Joint Research Centre) and draws cells with
+tessellates the world into $10\times10$\,km cells over population
+density using GHS-POP and built volume using GHS-BUILT-V
+(Joint Research Centre, European Commission) and draws cells with
 probability proportional to a \emph{blended} mix of population
 and built volume (default $\alpha=0.5$). The built-volume term
 prevents low-residency but high-activity fabric---campuses,
@@ -178,8 +181,9 @@ not yet started).}
 \label{fig:world}
 \end{figure}
 
-Across the 25 paired observations, 24 are positive (single
-$-$8\,m exception). The pooled difference is $+$16\,m median,
+Across the 25 paired observations, 24 have longer walk from
+centroid to nearest road network than from entrance (single exception where the centroid is
+closer than the entrance). The pooled difference is $+$16\,m median,
 $+$80\,m max for distance to nearest road network ($n=$15); $+$37\,m
 median, $+$92\,m max for distance to nearest transit stop ($n=$10).
 
