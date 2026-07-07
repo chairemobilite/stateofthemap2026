@@ -31,6 +31,19 @@ function intZoom(zoom: number): number {
     return Math.floor(zoom);
 }
 
+/** Default zoom for iD/OSM editor permalinks — matches the backend
+ *  `DEFAULT_OSM_EDITOR_URL` and iD's comfortable level for entrances. */
+export const OSM_EDITOR_DEFAULT_ZOOM = 20;
+
+/**
+ * `zoom/lat/lon` segment for iD and osm.org editor URLs (`#map=…`).
+ * Zoom is fixed at {@link OSM_EDITOR_DEFAULT_ZOOM} so the fragment can
+ * be pasted straight after `#map=` in any editor permalink.
+ */
+export function osmEditorMapSegment({ lat, lon }: Pick<MapPoint, 'lat' | 'lon'>): string {
+    return `${OSM_EDITOR_DEFAULT_ZOOM}/${lat}/${lon}`;
+}
+
 /**
  * Mapillary web app, deeplinked to the click position. The viewer
  * lands at `lat/lng/z` and renders coverage dots; the user picks the
@@ -146,19 +159,19 @@ export function amapUrl({ lat, lon }: MapPoint): string {
 
 /**
  * OSM editor URL built from the backend-managed template.
- * `{lat}` / `{lon}` / `{zoom}` placeholders are substituted with the
- * click position. The template itself is fetched from
- * `GET /api/config` so operators can swap the iD permalink for a
- * self-hosted editor / RapiD / JOSM remote-control endpoint without
- * a frontend rebuild.
+ * `{lat}` / `{lon}` are substituted with the click position; `{zoom}`
+ * is always {@link OSM_EDITOR_DEFAULT_ZOOM} so the editor opens at
+ * entrance-editing level regardless of the focus map's current zoom.
+ * The template itself is fetched from `GET /api/config` so operators
+ * can swap the iD permalink for a self-hosted editor / RapiD / JOSM
+ * remote-control endpoint without a frontend rebuild.
  *
  * @param template - URL with `{lat}` / `{lon}` / `{zoom}` placeholders.
- * @param point    - Click position; `zoom` is floored to an integer
- *                   to match the iD permalink convention.
+ * @param point    - Click position (`lat` / `lon` only; map zoom is ignored).
  */
-export function osmEditorUrl(template: string, { lat, lon, zoom }: MapPoint): string {
+export function osmEditorUrl(template: string, { lat, lon }: Pick<MapPoint, 'lat' | 'lon'>): string {
     return template
         .replaceAll('{lat}', String(lat))
         .replaceAll('{lon}', String(lon))
-        .replaceAll('{zoom}', String(intZoom(zoom)));
+        .replaceAll('{zoom}', String(OSM_EDITOR_DEFAULT_ZOOM));
 }

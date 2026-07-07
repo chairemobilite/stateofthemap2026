@@ -38,7 +38,7 @@ describe('<MapContextMenu />', () => {
     });
 
     it.each(ITEMS)(
-        'renders item $label as a target=_blank link to $href with rel=noopener',
+        'renders link item $label as a target=_blank link to $href with rel=noopener',
         ({ label, href }) => {
             renderMenu();
             const link = screen.getByRole('menuitem', { name: label }) as HTMLAnchorElement;
@@ -47,6 +47,18 @@ describe('<MapContextMenu />', () => {
             expect(link.getAttribute('rel')).toBe('noopener noreferrer');
         },
     );
+
+    it('renders action items as buttons and calls onSelect on click', () => {
+        const onSelect = vi.fn();
+        const onDismiss = vi.fn();
+        renderMenu({
+            items: [{ key: 'copy', label: 'Copy location', onSelect }],
+            onDismiss,
+        });
+        fireEvent.click(screen.getByRole('menuitem', { name: 'Copy location' }));
+        expect(onSelect).toHaveBeenCalledOnce();
+        expect(onDismiss).toHaveBeenCalledOnce();
+    });
 
     it('calls onDismiss when an item is clicked', () => {
         const onDismiss = vi.fn();

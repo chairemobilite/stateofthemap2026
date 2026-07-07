@@ -16,11 +16,9 @@ import { useEffect, useRef } from 'react';
 
 /** One menu row. `key` should be a stable identifier (e.g. the
  *  service name) so React reconciliation works across re-renders. */
-export interface MapContextMenuItem {
-    key: string;
-    label: string;
-    href: string;
-}
+export type MapContextMenuItem =
+    | { key: string; label: string; href: string }
+    | { key: string; label: string; onSelect: () => void };
 
 export interface MapContextMenuProps {
     /** CSS-pixel offset relative to the menu's positioned ancestor.
@@ -73,16 +71,30 @@ export function MapContextMenu({ position, items, onDismiss }: MapContextMenuPro
             <ul className="map-context-menu__list">
                 {items.map((item) => (
                     <li key={item.key} role="none">
-                        <a
-                            role="menuitem"
-                            className="map-context-menu__item"
-                            href={item.href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={onDismiss}
-                        >
-                            {item.label}
-                        </a>
+                        {'href' in item ? (
+                            <a
+                                role="menuitem"
+                                className="map-context-menu__item"
+                                href={item.href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={onDismiss}
+                            >
+                                {item.label}
+                            </a>
+                        ) : (
+                            <button
+                                type="button"
+                                role="menuitem"
+                                className="map-context-menu__item"
+                                onClick={() => {
+                                    item.onSelect();
+                                    onDismiss();
+                                }}
+                            >
+                                {item.label}
+                            </button>
+                        )}
                     </li>
                 ))}
             </ul>

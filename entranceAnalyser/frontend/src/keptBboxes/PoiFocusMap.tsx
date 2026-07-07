@@ -60,6 +60,7 @@ import {
     googleStreetViewUrl,
     kartaViewUrl,
     mapillaryUrl,
+    osmEditorMapSegment,
     osmEditorUrl,
     panoramaxUrl,
     type MapPoint,
@@ -996,6 +997,13 @@ export function PoiFocusMap({
             { key: 'gsv', label: 'Open in Google Street View', href: googleStreetViewUrl(p) },
             { key: 'baidu', label: 'Open in Baidu (百度地图)', href: baiduPanoramaUrl(p) },
             { key: 'amap', label: 'Open in AMap (高德地图)', href: amapUrl(p) },
+            {
+                key: 'copy-osm-location',
+                label: 'Copy lat/lon at location',
+                onSelect: () => {
+                    void navigator.clipboard.writeText(osmEditorMapSegment(p));
+                },
+            },
             { key: 'osm', label: 'Edit on OpenStreetMap', href: osmEditorUrl(osmEditorUrlTemplate, p) },
         ];
     }, [menuState, osmEditorUrlTemplate]);

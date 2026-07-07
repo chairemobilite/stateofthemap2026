@@ -7,6 +7,7 @@ import {
     googleStreetViewUrl,
     kartaViewUrl,
     mapillaryUrl,
+    osmEditorMapSegment,
     osmEditorUrl,
     panoramaxUrl,
     type MapPoint,
@@ -51,22 +52,34 @@ describe('mapLinks', () => {
         expect(mapillaryUrl(high)).toContain('lng=2.344034');
     });
 
+    describe('osmEditorMapSegment', () => {
+        it('formats zoom/lat/lon for paste into editor permalinks', () => {
+            expect(osmEditorMapSegment(MTL)).toBe('20/45.5017/-73.5673');
+        });
+
+        it('preserves full coordinate precision', () => {
+            expect(osmEditorMapSegment({ lat: 48.810323, lon: 2.344034 })).toBe(
+                '20/48.810323/2.344034',
+            );
+        });
+    });
+
     describe('osmEditorUrl', () => {
         it.each([
             [
                 'iD (default osm.org)',
                 'https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}',
-                'https://www.openstreetmap.org/edit#map=17/45.5017/-73.5673',
+                'https://www.openstreetmap.org/edit#map=20/45.5017/-73.5673',
             ],
             [
                 'iD with editor=id query',
                 'https://www.openstreetmap.org/edit?editor=id#map={zoom}/{lat}/{lon}',
-                'https://www.openstreetmap.org/edit?editor=id#map=17/45.5017/-73.5673',
+                'https://www.openstreetmap.org/edit?editor=id#map=20/45.5017/-73.5673',
             ],
             [
                 'self-hosted iD with query string',
                 'https://id.example.org/?lat={lat}&lon={lon}&z={zoom}',
-                'https://id.example.org/?lat=45.5017&lon=-73.5673&z=17',
+                'https://id.example.org/?lat=45.5017&lon=-73.5673&z=20',
             ],
             [
                 'JOSM remote control (only lat/lon, no zoom placeholder)',
@@ -80,7 +93,7 @@ describe('mapLinks', () => {
         it('leaves unrelated braces in the template alone', () => {
             const template = 'https://example.org/{lat},{lon}/{zoom}#{not_a_placeholder}';
             expect(osmEditorUrl(template, MTL)).toBe(
-                'https://example.org/45.5017,-73.5673/17#{not_a_placeholder}',
+                'https://example.org/45.5017,-73.5673/20#{not_a_placeholder}',
             );
         });
     });
