@@ -1,13 +1,28 @@
-//! Full-page tables of persisted POI-focus measurement aggregates.
+//! Full-page tables of persisted POI-focus measurement aggregates and
+//! per-POI destination mismatch warnings.
 
 import { useEffect, useState } from 'react';
 
 import {
+    fetchAppConfig,
+    fetchPoiFocusMeasurementDestinationWarnings,
     fetchPoiFocusMeasurementStats,
     type MeasurementPairAggregate,
     type PoiFocusMeasurementStats,
 } from './api';
+import {
+    DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
+    aggregateDestinationWarningsByMessage,
+    type DestinationWarningRow,
+} from './keptBboxes/measurementDestinationWarnings';
 import { formatMinutesSeconds } from './measurementStatsFormat';
+
+export interface MeasurementStatsPageProps {
+    /** Open the focus map for one kept bbox (wired from `App`). */
+    onOpenPoiFocus?: (bboxId: string) => void;
+    /** Optional label for POI links in the warnings collapse (defaults to `bbox_id`). */
+    poiLabelForBbox?: (bboxId: string) => string;
+}
 
 function round1(n: number): string {
     return Number.isFinite(n) ? n.toFixed(1) : '—';
@@ -109,12 +124,90 @@ function StatPairTable({
     );
 }
 
+function DestinationWarningsSection({
+    rows,
+    matchRadiusM,
+    onOpenPoiFocus,
+    poiLabelForBbox,
+}: {
+    rows: DestinationWarningRow[];
+    matchRadiusM: number;
+    onOpenPoiFocus?: (bboxId: string) => void;
+    poiLabelForBbox: (bboxId: string) => string;
+}) {
+    const aggregated = aggregateDestinationWarningsByMessage(rows);
+
+    return (
+        <section className="measurement-stats__section measurement-stats__section--warnings">
+            <h2 className="measurement-stats__h2">Destination mismatches</h2>
+            <p className="measurement-stats__section-note">
+                Polylines aimed at the same destination type (transit stop, walking network, …)
+                but drawn from different entrance anchors must land on the same endpoint. Endpoints
+                farther than <strong>{matchRadiusM} m</strong> apart are flagged (same rule as the
+                focus-map yellow banner). <code>to_nearest_entrance</code> and{' '}
+                <code>to_nearest_main_entrance</code> are excluded.
+            </p>
+            {aggregated.length === 0 ? (
+                <p className="measurement-stats__empty">No destination mismatches across kept POIs.</p>
+            ) : (
+                <ul className="measurement-stats__warning-list">
+                    {aggregated.map((row) => (
+                        <li key={row.message}>
+                            <details className="measurement-stats__warning-collapse">
+                                <summary className="measurement-stats__warning-summary">
+                                    <span
+                                        className="measurement-stats__warning-count"
+                                        aria-label={`${row.bbox_ids.length} POI(s)`}
+                                    >
+                                        {row.bbox_ids.length}
+                                    </span>
+                                    <span className="measurement-stats__warning-message">
+                                        {row.message}
+                                    </span>
+                                </summary>
+                                <ul className="measurement-stats__warning-pois">
+                                    {row.bbox_ids.map((bboxId) => (
+                                        <li key={bboxId}>
+                                            {onOpenPoiFocus ? (
+                                                <button
+                                                    type="button"
+                                                    className="measurement-stats__poi-link"
+                                                    onClick={() => onOpenPoiFocus(bboxId)}
+                                                >
+                                                    {poiLabelForBbox(bboxId)}
+                                                </button>
+                                            ) : (
+                                                <code className="measurement-stats__bbox-id">
+                                                    {poiLabelForBbox(bboxId)}
+                                                </code>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </details>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </section>
+    );
+}
+
 /**
  * Load and display global measurement statistics from
- * `GET /api/analyses/poi_focus_measurement_stats`.
+ * `GET /api/analyses/poi_focus_measurement_stats` and destination
+ * mismatch warnings from
+ * `GET /api/analyses/poi_focus_measurement_destination_warnings`.
  */
-export function MeasurementStatsPage() {
+export function MeasurementStatsPage({
+    onOpenPoiFocus,
+    poiLabelForBbox = (bboxId) => bboxId,
+}: MeasurementStatsPageProps = {}) {
     const [stats, setStats] = useState<PoiFocusMeasurementStats | null>(null);
+    const [destinationWarnings, setDestinationWarnings] = useState<DestinationWarningRow[] | null>(
+        null,
+    );
+    const [matchRadiusM, setMatchRadiusM] = useState(DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -124,8 +217,18 @@ export function MeasurementStatsPage() {
         setError(null);
         void (async () => {
             try {
-                const s = await fetchPoiFocusMeasurementStats();
-                if (!cancelled) setStats(s);
+                const [s, warningsBody, config] = await Promise.all([
+                    fetchPoiFocusMeasurementStats(),
+                    fetchPoiFocusMeasurementDestinationWarnings(),
+                    fetchAppConfig(),
+                ]);
+                if (cancelled) return;
+                setStats(s);
+                setDestinationWarnings(warningsBody.warnings);
+                setMatchRadiusM(
+                    config.measurement_destination_match_radius_m ??
+                        DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
+                );
             } catch (e) {
                 if (!cancelled) {
                     setError(e instanceof Error ? e.message : String(e));
@@ -157,8 +260,14 @@ export function MeasurementStatsPage() {
                     {error}
                 </p>
             )}
-            {!loading && !error && stats && (
+            {!loading && !error && stats && destinationWarnings !== null && (
                 <div className="measurement-stats-page__body">
+                    <DestinationWarningsSection
+                        rows={destinationWarnings}
+                        matchRadiusM={matchRadiusM}
+                        onOpenPoiFocus={onOpenPoiFocus}
+                        poiLabelForBbox={poiLabelForBbox}
+                    />
                     <StatPairTable
                         title="measurement_type × entrance_type"
                         attrALabel="measurement_type"

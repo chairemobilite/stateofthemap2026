@@ -83,6 +83,10 @@ import {
     type MeasurementPurpose,
 } from './measurementCatalog';
 import {
+    DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
+    findMeasurementDestinationMismatches,
+} from './measurementDestinationWarnings';
+import {
     DEFAULT_WALKING_SPEED_KMH,
     ANCHOR_UI_GUARD_PX,
     calculatePathLength,
@@ -134,6 +138,9 @@ export interface PoiFocusMapProps {
      *  isolation. The `{lat}`, `{lon}`, `{zoom}` placeholders are
      *  substituted by `mapLinks.osmEditorUrl`. */
     osmEditorUrlTemplate: string;
+    /** Endpoint match tolerance (m) for destination-mismatch warnings;
+     *  from `GET /api/config` (`measurement_destination_match_radius_m`). */
+    measurementDestinationMatchRadiusM?: number;
     /** Persisted measurement rows for this bbox (from `GET …/poi_focus_measurements`). */
     measurements: PoiFocusMeasurement[];
     measurementsLoading: boolean;
@@ -524,6 +531,7 @@ export function PoiFocusMap({
     onBack,
     onLoadFocus,
     osmEditorUrlTemplate,
+    measurementDestinationMatchRadiusM = DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
     measurements,
     measurementsLoading,
     measurementsError,
@@ -1191,6 +1199,11 @@ export function PoiFocusMap({
     const cancelVisible = isDirty;
     const closeVisible = !isDirty;
 
+    const destinationWarnings = useMemo(
+        () => findMeasurementDestinationMismatches(measurements, measurementDestinationMatchRadiusM),
+        [measurements, measurementDestinationMatchRadiusM],
+    );
+
     return (
         <div className="poi-focus-map">
             <header className="poi-focus-map__header">
@@ -1285,6 +1298,16 @@ export function PoiFocusMap({
                 )}
             </header>
 
+            {destinationWarnings.length > 0 && (
+                <div className="poi-focus-map__destination-warnings" role="alert">
+                    <ul className="poi-focus-map__destination-warnings__list">
+                        {destinationWarnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
             <div ref={containerRef} className="poi-focus-map__canvas" data-testid="poi-focus-map">
                 <MapContextMenu
                     position={menuState?.position ?? null}
@@ -1313,6 +1336,16 @@ export function PoiFocusMap({
                                 <p className="measure-panel__error" role="alert">
                                     {mutationError}
                                 </p>
+                            )}
+                            {destinationWarnings.length > 0 && (
+                                <div className="measure-panel__warnings" role="alert">
+                                    <strong>Destination mismatches</strong>
+                                    <ul>
+                                        {destinationWarnings.map((warning) => (
+                                            <li key={warning}>{warning}</li>
+                                        ))}
+                                    </ul>
+                                </div>
                             )}
                             <div>
                                 <strong>{pathLengthM}</strong> m

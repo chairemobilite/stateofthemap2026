@@ -78,6 +78,7 @@ fn stub_app_config() -> AppConfig {
     AppConfig {
         osm_editor_url: "https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}".into(),
         poi_focus_radius_m: 150,
+        measurement_destination_match_radius_m: 10.0,
     }
 }
 
@@ -417,6 +418,7 @@ async fn config_endpoint_echoes_runtime_overrides() {
         AppConfig {
             osm_editor_url: "https://example.org/edit?lat={lat}&lon={lon}&z={zoom}".into(),
             poi_focus_radius_m: 250,
+            measurement_destination_match_radius_m: 10.0,
         },
     );
     let app = api::router(state);

@@ -19,6 +19,7 @@
 //! - `PATCH /api/bbox/kept/:id/poi_focus_measurements/:measure_id` → update geometry + speed
 //! - `DELETE /api/bbox/kept/:id/poi_focus_measurements/:measure_id` → remove one row
 //! - `GET  /api/analyses/poi_focus_measurement_stats` → min/max/avg/median length and duration by attribute pairs
+//! - `GET  /api/analyses/poi_focus_measurement_destination_warnings` → per-POI destination mismatch warnings
 //!
 //! The server is stateless between requests: the client echoes the
 //! full bbox back on decision, which lets us persist it in a single
@@ -43,6 +44,7 @@ use crate::focus_measurements::{
     validate_walking_speed_kmh, PoiFocusMeasurement, PoiFocusMeasurementStats,
     PoiFocusMeasurementUpsertBody,
 };
+use crate::measurement_destination_warnings::PoiFocusMeasurementDestinationWarningsResponse;
 use crate::overpass::{parse_osm_ref, OverpassClient, OverpassError, OsmType, Poi};
 use crate::poi_config::PoiTagConfig;
 use crate::poi_focus::{fetch_focus, PoiFocusResult};
@@ -70,6 +72,9 @@ pub struct AppConfig {
     /// here so the UI can show the active default before the first
     /// focus map is fetched.
     pub poi_focus_radius_m: u32,
+    /// Endpoint match tolerance (m) for destination-mismatch warnings
+    /// on the focus map and `GET …/poi_focus_measurement_destination_warnings`.
+    pub measurement_destination_match_radius_m: f64,
 }
 
 /// Shared state: the sampler (optional when no grid has been built
@@ -134,6 +139,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/analyses/poi_focus_measurement_stats",
             get(poi_focus_measurement_stats_handler),
+        )
+        .route(
+            "/api/analyses/poi_focus_measurement_destination_warnings",
+            get(poi_focus_measurement_destination_warnings_handler),
         )
         .with_state(state)
 }
@@ -716,6 +725,19 @@ async fn poi_focus_measurement_stats_handler(
         .await
         .map_err(internal)?;
     Ok(Json(stats))
+}
+
+async fn poi_focus_measurement_destination_warnings_handler(
+    State(state): State<AppState>,
+) -> Result<Json<PoiFocusMeasurementDestinationWarningsResponse>, ApiError> {
+    let body = state
+        .store
+        .poi_focus_measurement_destination_warnings(
+            state.config.measurement_destination_match_radius_m,
+        )
+        .await
+        .map_err(internal)?;
+    Ok(Json(body))
 }
 
 #[derive(Debug, Serialize)]

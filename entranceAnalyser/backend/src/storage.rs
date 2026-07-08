@@ -31,6 +31,9 @@ use crate::focus_measurements::{
     EntranceKind, MeasurementFourNumberStats, MeasurementPairAggregate, MeasurementPurpose,
     MeasurementStartOrigin, PoiFocusMeasurement, PoiFocusMeasurementStats,
 };
+use crate::measurement_destination_warnings::{
+    destination_warnings_by_bbox, PoiFocusMeasurementDestinationWarningsResponse,
+};
 use crate::overpass::Poi;
 use crate::poi_focus::PoiFocusResult;
 
@@ -365,6 +368,21 @@ impl PgStore {
         Ok(())
     }
 
+    /// Every saved measurement polyline across all kept bboxes (oldest first).
+    pub async fn list_all_poi_focus_measurements(
+        &self,
+    ) -> Result<Vec<PoiFocusMeasurement>, sqlx::Error> {
+        let rows: Vec<MeasurementRow> = sqlx::query_as(
+            "SELECT id, bbox_id, coordinates, walking_speed_kmh, length_m, \
+                    measurement_type, entrance_type, start_origin, start_osm_node_id, created_at \
+             FROM poi_focus_measurements \
+             ORDER BY bbox_id ASC, created_at ASC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(MeasurementRow::into_public).collect())
+    }
+
     /// Every saved measurement polyline for one kept bbox (oldest first).
     pub async fn list_poi_focus_measurements(
         &self,
@@ -498,6 +516,18 @@ impl PgStore {
             by_measurement_type_and_entrance_type,
             by_measurement_type_and_start_origin,
             by_entrance_type_and_start_origin,
+        })
+    }
+
+    /// Destination mismatch warnings for every kept bbox that has at least
+    /// one warning (same endpoint rule as the focus-map UI).
+    pub async fn poi_focus_measurement_destination_warnings(
+        &self,
+        match_radius_m: f64,
+    ) -> Result<PoiFocusMeasurementDestinationWarningsResponse, sqlx::Error> {
+        let measurements = self.list_all_poi_focus_measurements().await?;
+        Ok(PoiFocusMeasurementDestinationWarningsResponse {
+            warnings: destination_warnings_by_bbox(&measurements, match_radius_m),
         })
     }
 

@@ -359,6 +359,91 @@ async fn poi_focus_measurement_stats_groups_pairs_with_median_length_and_duratio
 }
 
 #[tokio::test]
+async fn poi_focus_measurement_destination_warnings_groups_by_bbox() {
+    use entrance_analyser_backend::focus_measurements::{
+        EntranceKind, MeasurementPurpose, MeasurementStartOrigin,
+    };
+
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let store = PgStore::new(db.pool.clone());
+    let bbox_a = sample_bbox([0.0, 0.0]);
+    let bbox_b = sample_bbox([1.0, 1.0]);
+    let id_a = bbox_a.id;
+    let id_b = bbox_b.id;
+    store.append(bbox_a).await.unwrap();
+    store.append(bbox_b).await.unwrap();
+
+    let seg = |dx: f64| vec![[0.0_f64, 0.0_f64], [dx, 0.0_f64]];
+    let len = |dx: f64| path_length_m_haversine(&seg(dx)).unwrap();
+
+    store
+        .insert_poi_focus_measurement(
+            id_a,
+            &seg(0.001),
+            5.0,
+            len(0.001),
+            MeasurementPurpose::ToNearestTransitStop,
+            EntranceKind::Main,
+            MeasurementStartOrigin::OsmEntrance,
+            Some(1),
+        )
+        .await
+        .unwrap();
+    store
+        .insert_poi_focus_measurement(
+            id_a,
+            &seg(0.01),
+            5.0,
+            len(0.01),
+            MeasurementPurpose::ToNearestTransitStop,
+            EntranceKind::CentroidMainBuilding,
+            MeasurementStartOrigin::BuildingCentroid,
+            Some(2),
+        )
+        .await
+        .unwrap();
+    store
+        .insert_poi_focus_measurement(
+            id_b,
+            &seg(0.001),
+            5.0,
+            len(0.001),
+            MeasurementPurpose::ToNearestTransitStop,
+            EntranceKind::Main,
+            MeasurementStartOrigin::OsmEntrance,
+            Some(3),
+        )
+        .await
+        .unwrap();
+    store
+        .insert_poi_focus_measurement(
+            id_b,
+            &seg(0.00101),
+            5.0,
+            len(0.00101),
+            MeasurementPurpose::ToNearestTransitStop,
+            EntranceKind::CentroidMainBuilding,
+            MeasurementStartOrigin::BuildingCentroid,
+            Some(4),
+        )
+        .await
+        .unwrap();
+
+    let body = store
+        .poi_focus_measurement_destination_warnings(10.0)
+        .await
+        .unwrap();
+    assert_eq!(body.warnings.len(), 1);
+    assert_eq!(body.warnings[0].bbox_id, id_a);
+    assert_eq!(body.warnings[0].warnings.len(), 1);
+    assert!(body.warnings[0].warnings[0].contains("transit stop"));
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
 async fn append_writes_a_valid_postgis_polygon() {
     let Some(db) = common::pg_or_skip().await else {
         return;

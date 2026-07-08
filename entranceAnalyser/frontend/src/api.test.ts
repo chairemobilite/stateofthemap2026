@@ -6,6 +6,7 @@ import {
     deleteKept,
     fetchKept,
     fetchPoiFocuses,
+    fetchPoiFocusMeasurementDestinationWarnings,
     fetchPoiFocusMeasurementStats,
     fetchPoiPicks,
     fetchBboxAtCustomCentroid,
@@ -325,10 +326,29 @@ describe('api client', () => {
         expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_focus_measurement_stats');
     });
 
+    it('fetchPoiFocusMeasurementDestinationWarnings GETs per-POI warnings', async () => {
+        const body = {
+            warnings: [
+                {
+                    bbox_id: SAMPLE_BBOX.id,
+                    warnings: [
+                        'The nearest transit stop is not the same for main building centroid and main entrance',
+                    ],
+                },
+            ],
+        };
+        const fetchFn = jsonFetch(body);
+        expect(await fetchPoiFocusMeasurementDestinationWarnings(fetchFn)).toEqual(body);
+        expect(fetchFn).toHaveBeenCalledWith(
+            '/api/analyses/poi_focus_measurement_destination_warnings',
+        );
+    });
+
     it('fetchAppConfig hits /api/config and returns the parsed body', async () => {
         const config: AppConfig = {
             osm_editor_url: 'https://example.org/edit?lat={lat}&lon={lon}&z={zoom}',
             poi_focus_radius_m: 250,
+            measurement_destination_match_radius_m: 10,
         };
         const fetchFn = jsonFetch(config);
         expect(await fetchAppConfig(fetchFn)).toEqual(config);

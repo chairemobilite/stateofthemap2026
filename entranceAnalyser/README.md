@@ -30,10 +30,12 @@ backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
            src/overpass.rs                         Overpass QL client + result decoder
            src/poi_focus.rs                        focus-map fetcher (buildings + entrances)
            src/bin/build_grid.rs                   offline aggregation tool
+           src/measurement_destination_warnings.rs   per-POI destination mismatch detection (Haversine)
            src/bin/migrate.rs                      `entrance-analyser-migrate` — apply SQL migrations
+queries/   Ad-hoc SQL exports (e.g. measurement endpoints per POI)
 config/    Runtime config consumed by the analysis pipeline
            poi_tags.yml                            POI tag groups + exceptions
-frontend/  React + Vite + MapLibre GL — three screens:
+frontend/  React + Vite + MapLibre GL — four screens:
            src/                                    Sampling screen (keep/reject + strategy)
            src/useAppConfig.ts                     Hook fetching runtime config (OSM editor URL, focus radius)
            src/keptBboxes/                         Kept-bboxes overview map + popup + POI picker
@@ -45,6 +47,8 @@ frontend/  React + Vite + MapLibre GL — three screens:
            src/keptBboxes/measure.ts               Path length + walking-time helpers (tests)
            src/keptBboxes/measurementStart.ts      Infer first-vertex anchor for POST/PATCH (tests)
            src/keptBboxes/measurementCatalog.ts    measure purpose + entrance type wire values + labels
+           src/keptBboxes/measurementDestinationWarnings.ts   Destination mismatch warnings (focus map + tests)
+           src/MeasurementStatsPage.tsx            Global measurement aggregate tables
            src/keptBboxes/MapContextMenu.tsx       Right-click "open in …" menu (presentational)
            src/keptBboxes/mapLinks.ts              URL builders for 7 map services + OSM editor template
            src/keptBboxes/chinaCoords.ts           WGS84 → GCJ-02 → BD09 datum conversion (China)
@@ -67,7 +71,9 @@ The HTTP backend serves these endpoints:
 | POST   | `/api/bbox/kept/:id/poi_focus_measurements`   | create one measurement (incl. `start_origin`, `start_osm_node_id`) |
 | PATCH  | `/api/bbox/kept/:id/poi_focus_measurements/:measure_id` | update geometry + speed + start anchor (server recomputes `length_m`) |
 | DELETE | `/api/bbox/kept/:id/poi_focus_measurements/:measure_id` | delete one measurement row                             |
-| GET    | `/api/config`                               | runtime config echoed to the frontend (OSM editor URL, …)        |
+| GET    | `/api/analyses/poi_focus_measurement_stats` | min/max/avg/median length and walking duration by attribute pairs |
+| GET    | `/api/analyses/poi_focus_measurement_destination_warnings` | per-POI warnings when the same destination type lands on different endpoints across entrance anchors |
+| GET    | `/api/config`                               | runtime config (OSM editor URL, focus radius, destination-match radius, …) |
 
 ### Sampling strategies
 
@@ -251,6 +257,7 @@ kept bbox that already has a picked POI:
 | `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
 | `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. The popup hosts a **Pick POI** button that runs the Overpass picker on demand; picked POIs paint as **orange** until you check **Mark POI completed**, then **green** (same flag in the focus map header). |
 | `Focus`        | Zoom-in map anchored on one picked POI: building polygons, entrance markers, and a dashed buffer ring at the server-config radius. Reached via the **Open focus map** button in the popup; **Back** returns to the overview. **Remove from kept…** runs the same `DELETE` as the overview popup (confirms first). |
+| `Stats`        | Tables of global measurement aggregates (length and walking duration by purpose, entrance type, and start origin) plus instructions below for exporting destination-mismatch warnings across all POIs. |
 
 The `Kept bboxes` map uses a single GeoJSON source per geometry type
 (polygons for the rectangles, points for the low-zoom markers) so the
@@ -374,6 +381,91 @@ but three things deserve flagging because they're easy to get wrong:
 GeoJSON for saved lines lives in [`focusMeasurementGeoJson.ts`](frontend/src/keptBboxes/focusMeasurementGeoJson.ts); state mutations go through [`usePoiFocusMeasurements.ts`](frontend/src/keptBboxes/usePoiFocusMeasurements.ts).
 
 See `PoiFocusMap.tsx` for integration and `index.css` for the panel (z-index 6).
+
+### Destination mismatch warnings
+
+When the analyst draws several polylines toward the **same destination
+type** (transit stop, walking network, parking, …) but from **different
+entrance anchors** (`main` vs `centroid_main_building` vs
+`centroid_area`, …), the tool compares the **last vertex** of each
+saved line. If two anchors' endpoints are farther apart than the match
+radius, a warning is shown — for example:
+
+> The nearest transit stop is not the same for main building centroid and main entrance
+
+`to_nearest_entrance` and `to_nearest_main_entrance` are excluded
+(those targets *are* entrances, not shared off-site destinations).
+
+**Per POI (UI).** While reviewing one cell on the focus map, mismatches
+appear in a yellow banner under the header and again inside the
+measurement panel. Logic:
+[`measurementDestinationWarnings.ts`](frontend/src/keptBboxes/measurementDestinationWarnings.ts)
+(parametric tests).
+
+**Match radius (configurable).** Default **10 m**, overridable without
+rebuilding the frontend:
+
+```env
+MEASUREMENT_DESTINATION_MATCH_RADIUS_M=10
+```
+
+Read at backend startup; echoed on `GET /api/config` as
+`measurement_destination_match_radius_m` and used by both the focus
+map and the bulk export below.
+
+**All POIs (Stats tab).** The **Stats** screen groups warnings by message
+(badge = affected POI count). Expand a row to list each `bbox_id` with a
+link that opens the focus map for that POI.
+
+**All POIs (HTTP).** With the backend running:
+
+```bash
+curl -s http://127.0.0.1:3000/api/analyses/poi_focus_measurement_destination_warnings \
+  | jq '.warnings[] | {bbox_id, warnings}'
+```
+
+Response shape:
+
+```json
+{
+  "warnings": [
+    {
+      "bbox_id": "…",
+      "warnings": ["The nearest transit stop is not the same for …"]
+    }
+  ]
+}
+```
+
+Only kept bboxes with **at least one** warning are included. The
+handler reuses the same Rust module as the server-side check:
+[`measurement_destination_warnings.rs`](backend/src/measurement_destination_warnings.rs).
+From the frontend bundle,
+[`fetchPoiFocusMeasurementDestinationWarnings()`](frontend/src/api.ts)
+wraps the same route.
+
+**Raw endpoints (SQL).** To inspect or join endpoint coordinates in
+Postgres without re-implementing the Haversine logic, run
+[`queries/destination_warnings.sql`](queries/destination_warnings.sql)
+— one row per saved polyline with `endpoint_lon` / `endpoint_lat`. Pair
+that export with the HTTP route above when you need the canonical
+warning text per `bbox_id`.
+
+### Global length / duration stats
+
+The **Stats** tab calls `GET /api/analyses/poi_focus_measurement_stats`
+and renders min / max / mean / median **path length (m)** and
+**walking duration (s)** for every combination of:
+
+- `measurement_type` × `entrance_type`
+- `measurement_type` × `start_origin`
+- `entrance_type` × `start_origin`
+
+Duration uses the same formula as the focus map:
+`length_m × 3600 / (1000 × walking_speed_kmh)`. Useful for paper
+tables comparing centroid-anchored vs entrance-anchored walks; it does
+**not** include the destination-mismatch warnings above — use the
+dedicated endpoint for those.
 
 **1. China datum offset.** Chinese law requires consumer maps to
 **1. Pano-viewer deeplinks: GSV is the exception, not the rule.**

@@ -105,6 +105,25 @@ export function calculatePathLength(points: LngLatLike[]): number {
 }
 
 /**
+ * Great-circle distance between two WGS84 points in metres (Haversine).
+ * Pure function for tests and endpoint comparison without MapLibre.
+ */
+export function haversineDistanceM(
+    lon1: number,
+    lat1: number,
+    lon2: number,
+    lat2: number,
+): number {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 2 * 6_371_000 * Math.asin(Math.sqrt(a));
+}
+
+/**
  * Estimate walking time in minutes for a given distance at the
  * specified speed. Rounds to nearest minute. Returns 0 if speed <= 0.
  *

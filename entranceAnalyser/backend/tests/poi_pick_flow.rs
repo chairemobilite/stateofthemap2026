@@ -59,6 +59,7 @@ async fn build_router(pool: sqlx::PgPool, overpass_url: String) -> axum::Router 
         AppConfig {
             osm_editor_url: "https://www.openstreetmap.org/edit#map={zoom}/{lat}/{lon}".into(),
             poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10.0,
         },
     );
     api::router(state)

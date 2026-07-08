@@ -535,6 +535,29 @@ export async function fetchPoiFocusMeasurementStats(
     );
 }
 
+/** One POI (`bbox_id`) with destination mismatch warnings from the focus map. */
+export interface PoiMeasurementDestinationWarnings {
+    bbox_id: string;
+    warnings: string[];
+}
+
+/** `GET /api/analyses/poi_focus_measurement_destination_warnings` */
+export interface PoiFocusMeasurementDestinationWarningsResponse {
+    warnings: PoiMeasurementDestinationWarnings[];
+}
+
+/**
+ * Destination mismatch warnings for every kept POI that has at least one
+ * warning (same 5 m endpoint rule as the focus-map UI).
+ */
+export async function fetchPoiFocusMeasurementDestinationWarnings(
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiFocusMeasurementDestinationWarningsResponse> {
+    return jsonOrThrow<PoiFocusMeasurementDestinationWarningsResponse>(
+        await fetchFn(`${ANALYSES_BASE}/poi_focus_measurement_destination_warnings`),
+    );
+}
+
 // -------- Public runtime config (PR10) ---------------------------------------
 
 /** Mirrors `AppConfig` in `backend/src/api.rs`. Read once on app
@@ -546,6 +569,7 @@ export async function fetchPoiFocusMeasurementStats(
 export interface AppConfig {
     osm_editor_url: string;
     poi_focus_radius_m: number;
+    measurement_destination_match_radius_m: number;
 }
 
 /** `GET /api/config` — fetch the public-facing runtime config. */

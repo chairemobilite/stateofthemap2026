@@ -11,6 +11,7 @@ pub mod db;
 pub mod focus_measurements;
 pub mod geotiff_pop;
 pub mod lzw_transcode;
+pub mod measurement_destination_warnings;
 pub mod mollweide;
 pub mod overpass;
 pub mod poi_config;

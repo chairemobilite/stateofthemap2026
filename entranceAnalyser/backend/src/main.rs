@@ -59,6 +59,10 @@ const DEFAULT_POI_FOCUS_RADIUS_M: u32 = 150;
 /// client-side at click time.
 const DEFAULT_OSM_EDITOR_URL: &str = "https://www.openstreetmap.org/edit#map=20/{lat}/{lon}";
 
+/// Endpoint match tolerance (m) for destination-mismatch warnings when
+/// `MEASUREMENT_DESTINATION_MATCH_RADIUS_M` is unset.
+const DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M: f64 = 10.0;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config::load_dotenv();
@@ -109,6 +113,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(DEFAULT_POI_FOCUS_RADIUS_M);
     println!("POI focus radius: {poi_focus_radius_m} m");
 
+    let measurement_destination_match_radius_m =
+        std::env::var("MEASUREMENT_DESTINATION_MATCH_RADIUS_M")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M);
+    println!("Measurement destination match radius: {measurement_destination_match_radius_m} m");
+
     let osm_editor_url =
         std::env::var("OSM_EDITOR_URL").unwrap_or_else(|_| DEFAULT_OSM_EDITOR_URL.to_string());
     println!("OSM editor URL template: {osm_editor_url}");
@@ -116,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_config = AppConfig {
         osm_editor_url,
         poi_focus_radius_m,
+        measurement_destination_match_radius_m,
     };
     let state = api::AppState::new(
         PgStore::new(pool),

@@ -15,6 +15,7 @@ import { SamplingPanel } from './SamplingPanel';
 import { submitDecision, type Bbox, type Decision } from './api';
 import { useAppConfig } from './useAppConfig';
 import { useSampling } from './useSampling';
+import { DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M } from './keptBboxes/measurementDestinationWarnings';
 
 /** Fallback OSM editor URL used while the backend config is still
  *  loading or if the request fails. Mirrors `DEFAULT_OSM_EDITOR_URL`
@@ -174,7 +175,16 @@ function App() {
                 </>
             )}
 
-            {view === 'stats' && <MeasurementStatsPage />}
+            {view === 'stats' && (
+                <MeasurementStatsPage
+                    onOpenPoiFocus={handleOpenFocus}
+                    poiLabelForBbox={(bboxId) => {
+                        const pick = poiPicks.picks[bboxId];
+                        const name = pick?.poi?.tags?.name;
+                        return name ? `${name} (${bboxId})` : bboxId;
+                    }}
+                />
+            )}
 
             {view === 'kept' && (
                 <>
@@ -240,6 +250,10 @@ function App() {
                         onLoadFocus={poiFocus.loadFocus}
                         osmEditorUrlTemplate={
                             appConfig.config?.osm_editor_url ?? FALLBACK_OSM_EDITOR_URL
+                        }
+                        measurementDestinationMatchRadiusM={
+                            appConfig.config?.measurement_destination_match_radius_m ??
+                            DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M
                         }
                         measurements={focusMeasurements.measurements}
                         measurementsLoading={focusMeasurements.loading}
