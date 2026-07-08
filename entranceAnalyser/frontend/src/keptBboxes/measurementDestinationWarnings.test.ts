@@ -6,12 +6,12 @@ import {
     findMeasurementDestinationMismatches,
     measurementEndpoint,
     MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
-    DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
 } from './measurementDestinationWarnings';
 
 function sample(
     overrides: Partial<PoiFocusMeasurement> & Pick<PoiFocusMeasurement, 'entrance_type'>,
 ): PoiFocusMeasurement {
+    const { entrance_type, ...rest } = overrides;
     return {
         id: '00000000-0000-4000-8000-000000000001',
         bbox_id: '00000000-0000-4000-8000-000000000099',
@@ -22,11 +22,11 @@ function sample(
         walking_speed_kmh: 5,
         length_m: 100,
         measurement_type: 'to_nearest_transit_stop',
-        entrance_type: overrides.entrance_type,
         start_origin: 'osm_entrance',
         start_osm_node_id: 1,
         created_at: '2026-01-01T00:00:00Z',
-        ...overrides,
+        ...rest,
+        entrance_type,
     };
 }
 
