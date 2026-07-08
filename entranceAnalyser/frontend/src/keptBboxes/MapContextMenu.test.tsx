@@ -7,10 +7,12 @@ import {
     type MapContextMenuProps,
 } from './MapContextMenu';
 
-const ITEMS: MapContextMenuItem[] = [
+const LINK_ITEMS = [
     { key: 'mapillary', label: 'Mapillary', href: 'https://example.org/m' },
     { key: 'osm', label: 'OpenStreetMap', href: 'https://example.org/o' },
-];
+] as const;
+
+const ITEMS: MapContextMenuItem[] = [...LINK_ITEMS];
 
 function renderMenu(overrides: Partial<MapContextMenuProps> = {}) {
     const props: MapContextMenuProps = {
@@ -37,7 +39,7 @@ describe('<MapContextMenu />', () => {
         expect(style.top).toBe('60px');
     });
 
-    it.each(ITEMS)(
+    it.each(LINK_ITEMS)(
         'renders link item $label as a target=_blank link to $href with rel=noopener',
         ({ label, href }) => {
             renderMenu();
