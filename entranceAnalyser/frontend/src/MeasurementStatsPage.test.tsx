@@ -6,6 +6,7 @@ import { MeasurementStatsPage } from './MeasurementStatsPage';
 vi.mock('./api', () => ({
     fetchPoiFocusMeasurementStats: vi.fn(),
     fetchPoiFocusMeasurementDestinationWarnings: vi.fn(),
+    fetchPoiPickCountryStats: vi.fn(),
     fetchAppConfig: vi.fn(),
 }));
 
@@ -13,6 +14,7 @@ import {
     fetchAppConfig,
     fetchPoiFocusMeasurementDestinationWarnings,
     fetchPoiFocusMeasurementStats,
+    fetchPoiPickCountryStats,
 } from './api';
 
 const EMPTY_STATS = {
@@ -21,12 +23,15 @@ const EMPTY_STATS = {
     by_entrance_type_and_start_origin: [],
 };
 
+const EMPTY_COUNTRY_STATS = { by_country: [], total: 0, unresolved: 0 };
+
 const TRANSIT_MSG =
     'The nearest transit stop is not the same for main building centroid and main entrance';
 
 describe('<MeasurementStatsPage />', () => {
     it('aggregates warnings by message with a POI count', async () => {
         vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
         vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({
             warnings: [
                 { bbox_id: '00000000-0000-4000-8000-000000000099', warnings: [TRANSIT_MSG] },
@@ -53,6 +58,7 @@ describe('<MeasurementStatsPage />', () => {
     it('opens POI focus when a collapsed POI link is clicked', async () => {
         const onOpenPoiFocus = vi.fn();
         vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
         vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({
             warnings: [
                 { bbox_id: '00000000-0000-4000-8000-000000000099', warnings: [TRANSIT_MSG] },
@@ -79,8 +85,42 @@ describe('<MeasurementStatsPage />', () => {
         expect(onOpenPoiFocus).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000099');
     });
 
+    it.each([
+        ['CA row shows the Quebec subset', 'Canada', '2'],
+        ['non-CA row shows a dash instead of a Quebec count', 'France', '—'],
+    ])('POIs per country table: %s', async (_label, countryName, quebecCell) => {
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue({
+            by_country: [
+                { iso_code: 'CA', name: 'Canada', n: 3, n_in_quebec: 2 },
+                { iso_code: 'FR', name: 'France', n: 1, n_in_quebec: 0 },
+            ],
+            total: 5,
+            unresolved: 1,
+        });
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        await waitFor(() => {
+            expect(screen.getByText('POIs per country')).toBeInTheDocument();
+        });
+
+        const row = screen.getByText(countryName).closest('tr');
+        expect(row).not.toBeNull();
+        expect(row!.lastElementChild).toHaveTextContent(quebecCell);
+        expect(screen.getByText(/5 POI\(s\) total/)).toBeInTheDocument();
+        expect(screen.getByText(/1 outside every loaded country boundary/)).toBeInTheDocument();
+    });
+
     it('shows empty state when there are no destination mismatches', async () => {
         vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
         vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
         vi.mocked(fetchAppConfig).mockResolvedValue({
             osm_editor_url: 'https://example.org/edit',
