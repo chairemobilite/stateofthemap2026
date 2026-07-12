@@ -491,17 +491,21 @@ curl -s http://127.0.0.1:3000/api/analyses/poi_pick_country_stats | jq
 ```
 
 `unresolved` counts POIs matching no loaded country polygon; it equals
-`total` until you load the boundaries (one-time, re-runnable):
+`total` until you load the boundaries (one-time, re-runnable — same
+offline provisioning pattern as `entrance-analyser-build-grid`):
 
 ```bash
-backend/scripts/load_admin_boundaries.sh   # needs ogr2ogr (GDAL), psql, curl, unzip
+cargo run --bin entrance-analyser-load-boundaries
 ```
 
-The script downloads Natural Earth 1:10m data and fills
-`admin_boundaries` with every country (`level='country'`, ISO 3166-1
-alpha-2) plus the Quebec polygon (`level='region'`, `CA-QC`). It reads
-the connection from the workspace `.env` (`PG_CONNECTION_STRING_PREFIX`
-+ `PG_DATABASE`) or takes a full database URL as its only argument.
+The binary downloads Natural Earth 1:10m GeoJSON (official
+`natural-earth-vector` GitHub mirror) and rewrites `admin_boundaries`
+in one transaction: every country (`level='country'`, ISO 3166-1
+alpha-2, features sharing a code merged with `ST_Union`) plus the
+Quebec polygon (`level='region'`, `CA-QC`). The connection comes from
+the workspace `.env` (`PG_CONNECTION_STRING_PREFIX` + `PG_DATABASE`);
+`--database-url`, `--admin0-file` and `--admin1-file` override the
+target and the downloads.
 
 **1. China datum offset.** Chinese law requires consumer maps to
 **1. Pano-viewer deeplinks: GSV is the exception, not the rule.**

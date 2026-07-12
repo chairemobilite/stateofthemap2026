@@ -166,7 +166,7 @@ function PoiCountryStatsSection({ stats }: { stats: PoiPickCountryStats }) {
                     <p className="measurement-stats__section-note">
                         {stats.total} POI(s) total
                         {stats.unresolved > 0 &&
-                            ` — ${stats.unresolved} outside every loaded country boundary (load the boundaries with backend/scripts/load_admin_boundaries.sh)`}
+                            ` — ${stats.unresolved} outside every loaded country boundary (run entrance-analyser-load-boundaries)`}
                         .
                     </p>
                 </>
