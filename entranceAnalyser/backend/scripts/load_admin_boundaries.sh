@@ -73,17 +73,24 @@ ogr2ogr -f PostgreSQL "$OGR_DSN" "$WORKDIR/ne_10m_admin_1_states_provinces/ne_10
 echo "Filling admin_boundaries…"
 "$PSQL" "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
 BEGIN;
-DELETE FROM admin_boundaries;
+TRUNCATE admin_boundaries;
 
 -- Natural Earth uses '-99' for a few disputed ISO codes; iso_a2_eh is
--- the "extended homeland" fallback that fills most of them.
+-- the "extended homeland" fallback that fills most of them. Several
+-- features can share one ISO code (dependencies, disputed slivers), so
+-- merge them per code and keep the name of the largest piece.
 INSERT INTO admin_boundaries (level, iso_code, name, geom)
 SELECT 'country',
-       CASE WHEN iso_a2 = '-99' THEN iso_a2_eh ELSE iso_a2 END,
-       name,
-       ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3))
-FROM ne_admin0_staging
-WHERE COALESCE(CASE WHEN iso_a2 = '-99' THEN iso_a2_eh ELSE iso_a2 END, '-99') <> '-99';
+       iso,
+       (array_agg(name ORDER BY ST_Area(geom) DESC))[1],
+       ST_Multi(ST_Union(ST_CollectionExtract(ST_MakeValid(geom), 3)))
+FROM (
+    SELECT CASE WHEN iso_a2 = '-99' THEN iso_a2_eh ELSE iso_a2 END AS iso,
+           name, geom
+    FROM ne_admin0_staging
+) t
+WHERE COALESCE(iso, '-99') <> '-99'
+GROUP BY iso;
 
 INSERT INTO admin_boundaries (level, iso_code, name, geom)
 SELECT 'region', iso_3166_2, name,
