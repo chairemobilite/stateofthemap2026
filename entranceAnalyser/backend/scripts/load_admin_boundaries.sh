@@ -44,7 +44,9 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 fetch() { # fetch <basename> — download + unzip one Natural Earth shapefile
     local name="$1"
-    echo "Downloading $name…"
+    # Braces required: some shells would otherwise parse the UTF-8
+    # ellipsis as part of the variable name.
+    echo "Downloading ${name}…"
     curl -fsSL "$NE_BASE/$name.zip" -o "$WORKDIR/$name.zip"
     unzip -qo "$WORKDIR/$name.zip" -d "$WORKDIR/$name"
 }
