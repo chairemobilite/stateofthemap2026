@@ -8,6 +8,7 @@ import {
     fetchPoiFocuses,
     fetchPoiFocusMeasurementDestinationWarnings,
     fetchPoiFocusMeasurementStats,
+    fetchPoiPickCountryStats,
     fetchPoiPicks,
     fetchBboxAtCustomCentroid,
     fetchBboxAtCustomOsm,
@@ -324,6 +325,17 @@ describe('api client', () => {
         const fetchFn = jsonFetch(body);
         expect(await fetchPoiFocusMeasurementStats(fetchFn)).toEqual(body);
         expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_focus_measurement_stats');
+    });
+
+    it('fetchPoiPickCountryStats GETs POI counts per country', async () => {
+        const body = {
+            by_country: [{ iso_code: 'CA', name: 'Canada', n: 3, n_in_quebec: 2 }],
+            total: 4,
+            unresolved: 1,
+        };
+        const fetchFn = jsonFetch(body);
+        expect(await fetchPoiPickCountryStats(fetchFn)).toEqual(body);
+        expect(fetchFn).toHaveBeenCalledWith('/api/analyses/poi_pick_country_stats');
     });
 
     it('fetchPoiFocusMeasurementDestinationWarnings GETs per-POI warnings', async () => {

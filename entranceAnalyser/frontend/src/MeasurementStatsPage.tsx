@@ -7,8 +7,10 @@ import {
     fetchAppConfig,
     fetchPoiFocusMeasurementDestinationWarnings,
     fetchPoiFocusMeasurementStats,
+    fetchPoiPickCountryStats,
     type MeasurementPairAggregate,
     type PoiFocusMeasurementStats,
+    type PoiPickCountryStats,
 } from './api';
 import {
     DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
@@ -124,6 +126,55 @@ function StatPairTable({
     );
 }
 
+function PoiCountryStatsSection({ stats }: { stats: PoiPickCountryStats }) {
+    return (
+        <section className="measurement-stats__section">
+            <h2 className="measurement-stats__h2">POIs per country</h2>
+            <p className="measurement-stats__section-note">
+                Country of each picked POI (point-in-polygon on the loaded boundaries). POIs in{' '}
+                <strong>Quebec</strong> are flagged separately, as they will be treated apart in
+                future statistics.
+            </p>
+            {stats.total === 0 ? (
+                <p className="measurement-stats__empty">No picked POIs yet.</p>
+            ) : (
+                <>
+                    <div className="measurement-stats__scroll">
+                        <table className="measurement-stats__table">
+                            <thead>
+                                <tr>
+                                    <th>Country</th>
+                                    <th className="measurement-stats__num">POIs</th>
+                                    <th className="measurement-stats__num">in Quebec</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {stats.by_country.map((row) => (
+                                    <tr key={row.iso_code}>
+                                        <td>
+                                            {row.name} <code>{row.iso_code}</code>
+                                        </td>
+                                        <td className="measurement-stats__num">{row.n}</td>
+                                        <td className="measurement-stats__num">
+                                            {row.iso_code === 'CA' ? row.n_in_quebec : '—'}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                    <p className="measurement-stats__section-note">
+                        {stats.total} POI(s) total
+                        {stats.unresolved > 0 &&
+                            ` — ${stats.unresolved} outside every loaded country boundary (run entrance-analyser-load-boundaries)`}
+                        .
+                    </p>
+                </>
+            )}
+        </section>
+    );
+}
+
 function DestinationWarningsSection({
     rows,
     matchRadiusM,
@@ -204,6 +255,7 @@ export function MeasurementStatsPage({
     poiLabelForBbox = (bboxId) => bboxId,
 }: MeasurementStatsPageProps = {}) {
     const [stats, setStats] = useState<PoiFocusMeasurementStats | null>(null);
+    const [countryStats, setCountryStats] = useState<PoiPickCountryStats | null>(null);
     const [destinationWarnings, setDestinationWarnings] = useState<DestinationWarningRow[] | null>(
         null,
     );
@@ -217,13 +269,15 @@ export function MeasurementStatsPage({
         setError(null);
         void (async () => {
             try {
-                const [s, warningsBody, config] = await Promise.all([
+                const [s, countries, warningsBody, config] = await Promise.all([
                     fetchPoiFocusMeasurementStats(),
+                    fetchPoiPickCountryStats(),
                     fetchPoiFocusMeasurementDestinationWarnings(),
                     fetchAppConfig(),
                 ]);
                 if (cancelled) return;
                 setStats(s);
+                setCountryStats(countries);
                 setDestinationWarnings(warningsBody.warnings);
                 setMatchRadiusM(
                     config.measurement_destination_match_radius_m ??
@@ -262,6 +316,7 @@ export function MeasurementStatsPage({
             )}
             {!loading && !error && stats && destinationWarnings !== null && (
                 <div className="measurement-stats-page__body">
+                    {countryStats && <PoiCountryStatsSection stats={countryStats} />}
                     <DestinationWarningsSection
                         rows={destinationWarnings}
                         matchRadiusM={matchRadiusM}

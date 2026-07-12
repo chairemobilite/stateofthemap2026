@@ -535,6 +535,35 @@ export async function fetchPoiFocusMeasurementStats(
     );
 }
 
+/** POI counts for one country. `n_in_quebec` is the subset of `n` inside
+ *  Quebec (relevant for `iso_code === 'CA'`); Quebec POIs will be treated
+ *  separately in future statistics. Mirrors `PoiPickCountryCount`. */
+export interface PoiPickCountryCount {
+    iso_code: string;
+    name: string;
+    n: number;
+    n_in_quebec: number;
+}
+
+/** Wire shape for `GET /api/analyses/poi_pick_country_stats`. */
+export interface PoiPickCountryStats {
+    /** Sorted by `n` descending, then country name. */
+    by_country: PoiPickCountryCount[];
+    /** Every picked POI, including unresolved ones. */
+    total: number;
+    /** POIs matching no loaded country polygon. */
+    unresolved: number;
+}
+
+/** `GET /api/analyses/poi_pick_country_stats` — POI counts per country (+ Quebec subset). */
+export async function fetchPoiPickCountryStats(
+    fetchFn: typeof fetch = fetch,
+): Promise<PoiPickCountryStats> {
+    return jsonOrThrow<PoiPickCountryStats>(
+        await fetchFn(`${ANALYSES_BASE}/poi_pick_country_stats`),
+    );
+}
+
 /** One POI (`bbox_id`) with destination mismatch warnings from the focus map. */
 export interface PoiMeasurementDestinationWarnings {
     bbox_id: string;

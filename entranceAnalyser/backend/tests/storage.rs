@@ -444,6 +444,72 @@ async fn poi_focus_measurement_destination_warnings_groups_by_bbox() {
 }
 
 #[tokio::test]
+async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
+    use entrance_analyser_backend::overpass::{OsmType, Poi};
+
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let store = PgStore::new(db.pool.clone());
+
+    // Synthetic rectangles instead of real Natural Earth data: one fake
+    // country "AA", Canada around the St-Lawrence, and a Quebec region
+    // polygon nested inside Canada.
+    for (level, iso, name, wkt) in [
+        ("country", "AA", "Alphaland", "MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)))"),
+        ("country", "CA", "Canada", "MULTIPOLYGON(((-80 40, -60 40, -60 50, -80 50, -80 40)))"),
+        ("region", "CA-QC", "Québec", "MULTIPOLYGON(((-75 44, -70 44, -70 47, -75 47, -75 44)))"),
+    ] {
+        sqlx::query(
+            "INSERT INTO admin_boundaries (level, iso_code, name, geom) \
+             VALUES ($1, $2, $3, ST_GeomFromText($4, 4326))",
+        )
+        .bind(level)
+        .bind(iso)
+        .bind(name)
+        .bind(wkt)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let poi_at = |center: [f64; 2]| Poi {
+        osm_type: OsmType::Node,
+        osm_id: 1,
+        center,
+        tags: BTreeMap::new(),
+        group: "shop".into(),
+    };
+    // (POI center, expectation): Alphaland; Canada in Quebec; Canada
+    // outside Quebec; middle of the Pacific (unresolved).
+    for center in [[5.0, 5.0], [-73.55, 45.55], [-65.0, 42.0], [-150.0, 0.0]] {
+        let bbox = sample_bbox(center);
+        let id = bbox.id;
+        store.append(bbox).await.unwrap();
+        store.write_poi_pick(id, Some(&poi_at(center))).await.unwrap();
+    }
+    // A cached "no POI in this cell" row must not count.
+    let empty = sample_bbox([5.0, 6.0]);
+    let empty_id = empty.id;
+    store.append(empty).await.unwrap();
+    store.write_poi_pick(empty_id, None).await.unwrap();
+
+    let stats = store.aggregate_poi_pick_country_stats().await.unwrap();
+    assert_eq!(stats.total, 4);
+    assert_eq!(stats.unresolved, 1);
+    // Sorted by n descending, then name.
+    assert_eq!(stats.by_country.len(), 2);
+    assert_eq!(stats.by_country[0].iso_code, "CA");
+    assert_eq!(stats.by_country[0].n, 2);
+    assert_eq!(stats.by_country[0].n_in_quebec, 1);
+    assert_eq!(stats.by_country[1].iso_code, "AA");
+    assert_eq!(stats.by_country[1].n, 1);
+    assert_eq!(stats.by_country[1].n_in_quebec, 0);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
 async fn append_writes_a_valid_postgis_polygon() {
     let Some(db) = common::pg_or_skip().await else {
         return;

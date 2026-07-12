@@ -20,6 +20,7 @@
 //! - `DELETE /api/bbox/kept/:id/poi_focus_measurements/:measure_id` → remove one row
 //! - `GET  /api/analyses/poi_focus_measurement_stats` → min/max/avg/median length and duration by attribute pairs
 //! - `GET  /api/analyses/poi_focus_measurement_destination_warnings` → per-POI destination mismatch warnings
+//! - `GET  /api/analyses/poi_pick_country_stats` → POI counts per country (+ Quebec subset) via PostGIS
 //!
 //! The server is stateless between requests: the client echoes the
 //! full bbox back on decision, which lets us persist it in a single
@@ -49,7 +50,7 @@ use crate::overpass::{parse_osm_ref, OverpassClient, OverpassError, OsmType, Poi
 use crate::poi_config::PoiTagConfig;
 use crate::poi_focus::{fetch_focus, PoiFocusResult};
 use crate::sampler::{SampleError, Sampler, Strategy};
-use crate::storage::{PgStore, PoiRejectionReason};
+use crate::storage::{PgStore, PoiPickCountryStats, PoiRejectionReason};
 
 /// Public-facing runtime config exposed to the frontend via
 /// `GET /api/config`. Everything in here is safe to ship to clients —
@@ -143,6 +144,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/analyses/poi_focus_measurement_destination_warnings",
             get(poi_focus_measurement_destination_warnings_handler),
+        )
+        .route(
+            "/api/analyses/poi_pick_country_stats",
+            get(poi_pick_country_stats_handler),
         )
         .with_state(state)
 }
@@ -722,6 +727,17 @@ async fn poi_focus_measurement_stats_handler(
     let stats = state
         .store
         .aggregate_poi_focus_measurement_pair_stats()
+        .await
+        .map_err(internal)?;
+    Ok(Json(stats))
+}
+
+async fn poi_pick_country_stats_handler(
+    State(state): State<AppState>,
+) -> Result<Json<PoiPickCountryStats>, ApiError> {
+    let stats = state
+        .store
+        .aggregate_poi_pick_country_stats()
         .await
         .map_err(internal)?;
     Ok(Json(stats))

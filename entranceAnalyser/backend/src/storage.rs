@@ -531,6 +531,65 @@ impl PgStore {
         })
     }
 
+    /// Count picked POIs per country, with a per-country "in Quebec"
+    /// sub-count, by point-in-polygon against `admin_boundaries`
+    /// (populated by `scripts/load_admin_boundaries.sh`). POIs matching
+    /// no country polygon — or all POIs when the table is empty — land
+    /// in `unresolved`.
+    pub async fn aggregate_poi_pick_country_stats(
+        &self,
+    ) -> Result<PoiPickCountryStats, sqlx::Error> {
+        let rows: Vec<PoiCountryAggRow> = sqlx::query_as(
+            "WITH pois AS ( \
+                 SELECT ST_SetSRID(ST_MakePoint( \
+                            (payload->'poi'->'center'->>0)::float8, \
+                            (payload->'poi'->'center'->>1)::float8), 4326) AS pt \
+                 FROM analyses \
+                 WHERE kind = $1 AND jsonb_typeof(payload->'poi') = 'object' \
+             ), located AS ( \
+                 SELECT c.iso_code, c.name, \
+                        EXISTS (SELECT 1 FROM admin_boundaries q \
+                                WHERE q.level = 'region' AND q.iso_code = 'CA-QC' \
+                                  AND ST_Contains(q.geom, p.pt)) AS in_quebec \
+                 FROM pois p \
+                 LEFT JOIN admin_boundaries c \
+                   ON c.level = 'country' AND ST_Contains(c.geom, p.pt) \
+             ) \
+             SELECT iso_code, name, COUNT(*)::bigint AS n, \
+                    COUNT(*) FILTER (WHERE in_quebec)::bigint AS n_in_quebec \
+             FROM located \
+             GROUP BY iso_code, name \
+             ORDER BY n DESC, name",
+        )
+        .bind(POI_PICK_KIND)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let total = rows.iter().map(|r| r.n).sum();
+        // The NULL-country bucket (no polygon matched) becomes `unresolved`.
+        let unresolved = rows
+            .iter()
+            .filter(|r| r.iso_code.is_none())
+            .map(|r| r.n)
+            .sum();
+        let by_country = rows
+            .into_iter()
+            .filter_map(|r| {
+                Some(PoiPickCountryCount {
+                    iso_code: r.iso_code?,
+                    name: r.name.unwrap_or_default(),
+                    n: r.n,
+                    n_in_quebec: r.n_in_quebec,
+                })
+            })
+            .collect();
+        Ok(PoiPickCountryStats {
+            by_country,
+            total,
+            unresolved,
+        })
+    }
+
     async fn measurement_pair_bucket(
         pool: &PgPool,
         col_a: &'static str,
@@ -681,6 +740,42 @@ pub struct PoiPickPayload {
     pub rejected: bool,
     #[serde(default)]
     pub rejected_reason: Option<PoiRejectionReason>,
+}
+
+/// POI counts for one country, returned by
+/// [`PgStore::aggregate_poi_pick_country_stats`]. `n_in_quebec` is the
+/// subset of `n` that also falls inside the Quebec polygon (relevant
+/// for `iso_code = "CA"`; zero elsewhere) — Quebec POIs will be treated
+/// separately in future statistics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PoiPickCountryCount {
+    /// ISO 3166-1 alpha-2 country code from `admin_boundaries`.
+    pub iso_code: String,
+    pub name: String,
+    pub n: i64,
+    pub n_in_quebec: i64,
+}
+
+/// Wire shape of `GET /api/analyses/poi_pick_country_stats`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PoiPickCountryStats {
+    /// Sorted by `n` descending, then country name.
+    pub by_country: Vec<PoiPickCountryCount>,
+    /// Every picked POI, including unresolved ones.
+    pub total: i64,
+    /// POIs whose center matched no country polygon (always `total`
+    /// when `admin_boundaries` has not been loaded yet).
+    pub unresolved: i64,
+}
+
+/// Raw grouped row for the country aggregation; `iso_code`/`name` are
+/// `NULL` for POIs outside every loaded country polygon.
+#[derive(sqlx::FromRow)]
+struct PoiCountryAggRow {
+    iso_code: Option<String>,
+    name: Option<String>,
+    n: i64,
+    n_in_quebec: i64,
 }
 
 /// Flat row shape returned by `sqlx::query_as!` — the PostGIS `geom`

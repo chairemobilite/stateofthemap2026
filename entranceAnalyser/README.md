@@ -257,7 +257,7 @@ kept bbox that already has a picked POI:
 | `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
 | `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. The popup hosts a **Pick POI** button that runs the Overpass picker on demand; picked POIs paint as **orange** until you check **Mark POI completed**, then **green** (same flag in the focus map header). |
 | `Focus`        | Zoom-in map anchored on one picked POI: building polygons, entrance markers, and a dashed buffer ring at the server-config radius. Reached via the **Open focus map** button in the popup; **Back** returns to the overview. **Remove from kept…** runs the same `DELETE` as the overview popup (confirms first). |
-| `Stats`        | Tables of global measurement aggregates (length and walking duration by purpose, entrance type, and start origin) plus instructions below for exporting destination-mismatch warnings across all POIs. |
+| `Stats`        | Tables of global measurement aggregates (length and walking duration by purpose, entrance type, and start origin), a POIs-per-country table (with a Quebec subset), plus instructions below for exporting destination-mismatch warnings across all POIs. |
 
 The `Kept bboxes` map uses a single GeoJSON source per geometry type
 (polygons for the rectangles, points for the low-zoom markers) so the
@@ -466,6 +466,46 @@ Duration uses the same formula as the focus map:
 tables comparing centroid-anchored vs entrance-anchored walks; it does
 **not** include the destination-mismatch warnings above — use the
 dedicated endpoint for those.
+
+### POIs per country (with Quebec subset)
+
+The **Stats** tab also calls `GET /api/analyses/poi_pick_country_stats`
+and renders how many picked POIs fall in each country, plus how many of
+the Canadian ones are inside **Quebec** — those will be treated
+separately in future statistics. Resolution is a PostGIS
+point-in-polygon (`ST_Contains`) of each `poi.center` against the
+`admin_boundaries` table.
+
+```bash
+curl -s http://127.0.0.1:3000/api/analyses/poi_pick_country_stats | jq
+```
+
+```json
+{
+  "by_country": [
+    { "iso_code": "CA", "name": "Canada", "n": 12, "n_in_quebec": 8 }
+  ],
+  "total": 30,
+  "unresolved": 2
+}
+```
+
+`unresolved` counts POIs matching no loaded country polygon; it equals
+`total` until you load the boundaries (one-time, re-runnable — same
+offline provisioning pattern as `entrance-analyser-build-grid`):
+
+```bash
+cargo run --bin entrance-analyser-load-boundaries
+```
+
+The binary downloads Natural Earth 1:10m GeoJSON (official
+`natural-earth-vector` GitHub mirror) and rewrites `admin_boundaries`
+in one transaction: every country (`level='country'`, ISO 3166-1
+alpha-2, features sharing a code merged with `ST_Union`) plus the
+Quebec polygon (`level='region'`, `CA-QC`). The connection comes from
+the workspace `.env` (`PG_CONNECTION_STRING_PREFIX` + `PG_DATABASE`);
+`--database-url`, `--admin0-file` and `--admin1-file` override the
+target and the downloads.
 
 **1. China datum offset.** Chinese law requires consumer maps to
 **1. Pano-viewer deeplinks: GSV is the exception, not the rule.**

@@ -57,3 +57,7 @@ path = "src/bin/ensure_db.rs"
 [[bin]]
 name = "entrance-analyser-migrate"
 path = "src/bin/migrate.rs"
+
+[[bin]]
+name = "entrance-analyser-load-boundaries"
+path = "src/bin/load_boundaries.rs"
