@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Detect when polylines aimed at the same destination type land on
 //! different endpoints depending on the analyst's entrance-type anchor.
 //! Mirrors `frontend/src/keptBboxes/measurementDestinationWarnings.ts`.

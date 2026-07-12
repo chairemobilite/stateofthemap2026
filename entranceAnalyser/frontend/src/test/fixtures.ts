@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Shared test fixtures for the bbox shape so individual test files don't
 //! need to repeat (or drift on) the field list.
 

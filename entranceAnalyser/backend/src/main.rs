@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Entrance Analyser backend — dev-only HTTP server.
 //!
 //! Binds on `127.0.0.1:3000`, connects to Postgres, applies any pending

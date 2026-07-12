@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! `useAppConfig` — fetches the public runtime config from
 //! `GET /api/config` once on mount.
 //!

@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Popup panel that triggers and displays one POI pick.
 //!
 //! Three visual states, all rendered from the same component:

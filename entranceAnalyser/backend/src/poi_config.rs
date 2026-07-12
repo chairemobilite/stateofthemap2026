@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Loader for `config/poi_tags.yml`.
 //!
 //! The YAML shape is one top-level `groups` map (where each entry

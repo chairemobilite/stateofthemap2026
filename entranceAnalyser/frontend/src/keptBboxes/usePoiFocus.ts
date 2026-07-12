@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! `usePoiFocus` — owns the per-bbox POI focus map.
 //!
 //! Loads every cached focus result from `/api/analyses/poi_focuses`

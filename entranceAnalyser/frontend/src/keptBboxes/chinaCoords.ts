@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! WGS84 ↔ GCJ-02 ↔ BD09 coordinate conversions.
 //!
 //! Required because:

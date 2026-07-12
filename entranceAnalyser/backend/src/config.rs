@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Environment-driven configuration helpers.
 //!
 //! The workspace stores Postgres credentials in `.env` (and `.env.example`)

@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Right-click context menu rendered over the focus map.
 //!
 //! Pure presentational: the parent decides where the menu sits

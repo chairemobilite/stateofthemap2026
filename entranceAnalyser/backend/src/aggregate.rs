@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Aggregate GHS-POP native pixels into `factor × factor` super-cells.
 //!
 //! GHS-POP is published on a Mollweide grid where every pixel already covers

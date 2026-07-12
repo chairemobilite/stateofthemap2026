@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Integration tests for `PgStore`: round-trip kept bboxes and check the
 //! analyses side-table upsert semantics.
 

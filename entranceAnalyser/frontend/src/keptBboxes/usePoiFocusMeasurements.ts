@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Loads and mutates persisted POI-focus measurement polylines for one bbox.
 
 import { startTransition, useCallback, useEffect, useState } from 'react';

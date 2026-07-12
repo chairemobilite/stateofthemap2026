@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Typed client for the `entrance-analyser-backend` HTTP API.
 //!
 //! In development, `/api/...` is proxied to `http://127.0.0.1:3000/api/...`

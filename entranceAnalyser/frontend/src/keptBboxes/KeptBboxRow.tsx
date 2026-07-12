@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! One row in the kept-bboxes list: id + status pill header above a
 //! definition list of the bbox's headline numbers.
 

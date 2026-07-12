@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Load the `admin_boundaries` table (countries + Quebec) from Natural
 //! Earth 1:10m, the same "offline provisioning binary" pattern as
 //! `entrance-analyser-build-grid`.

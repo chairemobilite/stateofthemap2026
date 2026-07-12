@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Focus map: zoom in on one picked POI and paint its surrounding
 //! buildings + entrances inside the configured buffer ring.
 //!

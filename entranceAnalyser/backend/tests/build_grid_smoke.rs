@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! End-to-end smoke test for the `entrance-analyser-build-grid` binary.
 //!
 //! Synthesises a tiny 4 × 4 px Float32 GeoTIFF in a temp dir with

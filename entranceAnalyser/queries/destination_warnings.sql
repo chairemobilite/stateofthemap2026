@@ -1,3 +1,8 @@
+-- Copyright Polytechnique Montreal and contributors
+--
+-- This file is licensed under the MIT License.
+-- License text available at https://opensource.org/licenses/MIT
+
 -- Raw measurement endpoints per kept POI (one row per saved polyline).
 -- Use this to inspect or export endpoints; the Haversine mismatch
 -- logic (latest row per measurement_type × entrance_type, pairwise

@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Apply pending SQL migrations to the application database (`PG_DATABASE`).
 //!
 //! Reads the same `.env` / `PG_*` variables as the HTTP server (`config::load_dotenv`

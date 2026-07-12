@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Pure helpers turning a list of kept bboxes into the GeoJSON sources
 //! and MapLibre bounds the overview map needs. Kept separate from
 //! `KeptBboxesMap` so the geometry is unit-testable without pulling in

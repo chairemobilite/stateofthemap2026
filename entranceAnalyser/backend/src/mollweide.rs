@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Inverse Mollweide projection (EPSG:54009 → WGS84).
 //!
 //! GHS-POP is published on a Mollweide grid centred on the prime meridian and
