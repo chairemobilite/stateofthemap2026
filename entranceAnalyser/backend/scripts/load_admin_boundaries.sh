@@ -54,11 +54,19 @@ fetch() { # fetch <basename> — download + unzip one Natural Earth shapefile
 fetch ne_10m_admin_0_countries
 fetch ne_10m_admin_1_states_provinces
 
+# GDAL appends " application_name='GDAL x.y.z'" (with a space) to the
+# connection string unless one is already present, which is invalid in
+# URI form — so set it ourselves.
+case "$DB_URL" in
+    *\?*) OGR_DSN="PG:${DB_URL}&application_name=load_admin_boundaries" ;;
+    *)    OGR_DSN="PG:${DB_URL}?application_name=load_admin_boundaries" ;;
+esac
+
 # Load into staging tables; the SRS is already EPSG:4326.
 echo "Loading staging tables…"
-ogr2ogr -f PostgreSQL "PG:$DB_URL" "$WORKDIR/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp" \
+ogr2ogr -f PostgreSQL "$OGR_DSN" "$WORKDIR/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp" \
     -nln ne_admin0_staging -overwrite -nlt PROMOTE_TO_MULTI -lco GEOMETRY_NAME=geom
-ogr2ogr -f PostgreSQL "PG:$DB_URL" "$WORKDIR/ne_10m_admin_1_states_provinces/ne_10m_admin_1_states_provinces.shp" \
+ogr2ogr -f PostgreSQL "$OGR_DSN" "$WORKDIR/ne_10m_admin_1_states_provinces/ne_10m_admin_1_states_provinces.shp" \
     -nln ne_admin1_staging -overwrite -nlt PROMOTE_TO_MULTI -lco GEOMETRY_NAME=geom \
     -where "iso_3166_2 = 'CA-QC'"
 
