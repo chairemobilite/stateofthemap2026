@@ -29,7 +29,12 @@ else
     DB_URL="${PG_CONNECTION_STRING_PREFIX}${PG_DATABASE}"
 fi
 
-for tool in ogr2ogr psql curl unzip; do
+# psql binary: override with PSQL=…; defaults to Postgres.app's copy
+# when installed (macOS), otherwise whatever is on PATH.
+PSQL="${PSQL:-/Applications/Postgres.app/Contents/Versions/18/bin/psql}"
+command -v "$PSQL" >/dev/null || PSQL=psql
+
+for tool in ogr2ogr "$PSQL" curl unzip; do
     command -v "$tool" >/dev/null || { echo "error: $tool is required" >&2; exit 1; }
 done
 
@@ -56,7 +61,7 @@ ogr2ogr -f PostgreSQL "PG:$DB_URL" "$WORKDIR/ne_10m_admin_1_states_provinces/ne_
     -where "iso_3166_2 = 'CA-QC'"
 
 echo "Filling admin_boundaries…"
-psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+"$PSQL" "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
 BEGIN;
 DELETE FROM admin_boundaries;
 
