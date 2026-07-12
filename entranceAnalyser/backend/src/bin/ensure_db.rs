@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Idempotently create the application and test databases configured in
 //! `.env`. Lets developers without `psql` / `createdb` on their `PATH`
 //! bootstrap the project with a single Cargo command:

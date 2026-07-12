@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 /**
  * Format a duration in seconds as `Xm YYs` for table readability.
  * Negative values preserve a leading minus on minutes.

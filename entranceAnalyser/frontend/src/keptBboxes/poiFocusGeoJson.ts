@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Pure helpers turning a `PoiFocusResult` plus its host POI into the
 //! GeoJSON shapes the focus map needs. Kept separate from the
 //! `PoiFocusMap` component so the geometry stays unit-testable without

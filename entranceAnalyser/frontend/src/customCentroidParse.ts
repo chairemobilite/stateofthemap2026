@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 /**
  * Split a one-line paste on the first comma or slash (maps / GPS often emit
  * `lat,lon` or `lat/lon`). Later commas in the string are not treated as

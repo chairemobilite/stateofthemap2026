@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Auto-transcode LZW-compressed TIFFs to uncompressed so the
 //! `tiff = 0.11` crate can read them.
 //!

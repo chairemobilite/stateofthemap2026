@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! `usePoiPicks` — owns the per-bbox POI pick map.
 //!
 //! Loads every cached pick from `/api/analyses/poi_picks` on mount,

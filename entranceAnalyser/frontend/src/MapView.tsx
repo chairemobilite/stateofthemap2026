@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! MapLibre GL map container.
 //!
 //! Creates the map once on mount, destroys it on unmount, and reacts to

@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Dropdown + alpha slider for picking the sampling strategy.
 //!
 //! Kept as its own component so `SamplingPanel` stays a thin layout and

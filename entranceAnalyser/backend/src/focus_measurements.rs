@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Validation and geodesic length for persisted POI-focus measure polylines.
 //! Mirrors the frontend `measure.ts` speed bounds and Haversine length.
 //!

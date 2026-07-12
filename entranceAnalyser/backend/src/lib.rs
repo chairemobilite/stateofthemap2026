@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Shared library code for the entrance-analyser backend.
 //!
 //! Both the HTTP server (`src/main.rs`) and the offline build-grid binary

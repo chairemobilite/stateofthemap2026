@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 /**
  * Infer where a measurement’s first vertex is anchored (POI/focus centre,
  * OSM entrance, building polygon centroid, or unsnapped) so POST/PATCH

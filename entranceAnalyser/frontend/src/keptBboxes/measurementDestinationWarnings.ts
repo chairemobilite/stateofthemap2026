@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 /**
  * Detect when polylines aimed at the same destination type (transit stop,
  * walking network, …) land on different endpoints depending on the

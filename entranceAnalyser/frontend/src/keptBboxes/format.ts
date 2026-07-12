@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Formatting helpers scoped to the kept-bboxes view. Intentionally
 //! duplicated (not extracted from `SamplingPanel.tsx`) to avoid churn on
 //! an already-committed file; a future refactor can DRY them up.

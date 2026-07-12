@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Full-page tables of persisted POI-focus measurement aggregates and
 //! per-POI destination mismatch warnings.
 

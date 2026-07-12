@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Pure URL builders for the map's right-click "open in …" menu.
 //!
 //! All helpers take the click position (`lat`, `lon`, `zoom`) and

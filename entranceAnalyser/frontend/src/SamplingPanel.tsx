@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Sidebar panel: summary of the current candidate bbox + Keep/Skip.
 //!
 //! Pure presentational component driven by `useSampling`'s output so the

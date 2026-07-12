@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Migration smoke test: bring up a fresh database, apply the embedded
 //! migrations, and confirm the expected objects exist.
 //!

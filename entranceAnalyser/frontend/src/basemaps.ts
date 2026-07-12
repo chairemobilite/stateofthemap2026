@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Basemap catalogue for the Entrance Analyser map view.
 //!
 //! Each entry is a full MapLibre `StyleSpecification` so switching basemap

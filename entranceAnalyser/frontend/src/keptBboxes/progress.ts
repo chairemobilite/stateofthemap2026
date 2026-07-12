@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Progress-indicator contract for per-bbox analyses.
 //!
 //! Defined up front as a union + label map so the kept-bboxes view can

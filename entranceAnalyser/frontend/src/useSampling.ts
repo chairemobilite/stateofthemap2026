@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! `useSampling` — glue between the React UI and the backend API.
 //!
 //! Owns the current candidate bbox, the kept counter, and the loading /

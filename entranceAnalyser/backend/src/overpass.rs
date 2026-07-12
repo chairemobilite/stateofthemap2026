@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Overpass API client for the POI-pick analysis step.
 //!
 //! Given a bbox and a [`PoiTagConfig`], query Overpass for every

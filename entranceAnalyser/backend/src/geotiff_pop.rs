@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Streaming reader for the GHS-POP Mollweide GeoTIFF.
 //!
 //! The 1 km global file is ~5 GB raw / ~322 MB on disk; we never load it

@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! End-to-end coverage for `POST /api/bbox/kept/:id/poi_pick`,
 //! `PATCH /api/bbox/kept/:id/poi_pick`, and `GET /api/analyses/poi_picks`.
 //!

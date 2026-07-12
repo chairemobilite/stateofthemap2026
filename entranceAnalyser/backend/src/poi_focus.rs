@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Overpass query for the per-POI focus map.
 //!
 //! Given a picked POI and a radius (in metres), query Overpass for

@@ -1,3 +1,10 @@
+/*
+ * Copyright Polytechnique Montreal and contributors
+ *
+ * This file is licensed under the MIT License.
+ * License text available at https://opensource.org/licenses/MIT
+ */
+
 //! Pure helpers that turn a backend `Bbox` into the GeoJSON and bounds
 //! that MapLibre needs. Kept out of `MapView` so the geometry can be
 //! unit-tested without pulling in the map.
