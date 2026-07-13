@@ -387,6 +387,14 @@ async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
         (0.004, MeasurementPurpose::ToNearestTransitStop, EntranceKind::CentroidArea),
         (0.001, MeasurementPurpose::ToNearestEntrance, EntranceKind::Main),
         (0.002, MeasurementPurpose::ToNearestEntrance, EntranceKind::CentroidParcel),
+        // The two retired driving combos fold into to_nearest_driving_road
+        // in every stat, so this main/centroid pair must match up.
+        (0.001, MeasurementPurpose::ToNearestWalkingDrivingNetwork, EntranceKind::Main),
+        (
+            0.003,
+            MeasurementPurpose::ToNearestWalkingCyclingDrivingNetwork,
+            EntranceKind::CentroidMainBuilding,
+        ),
     ];
     for (dx, purpose, entrance) in rows {
         store
@@ -405,12 +413,25 @@ async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
     }
 
     let stats = store.aggregate_poi_focus_measurement_pair_stats().await.unwrap();
+    let types: Vec<&str> = stats
+        .main_entrance_vs_centroid
+        .iter()
+        .map(|r| r.measurement_type.as_str())
+        .collect();
     assert_eq!(
-        stats.main_entrance_vs_centroid.len(),
-        1,
-        "to_nearest_entrance must be excluded from the deltas"
+        types,
+        ["to_nearest_driving_road", "to_nearest_transit_stop"],
+        "entrance targets excluded; driving combos folded into driving_road"
     );
-    let row = &stats.main_entrance_vs_centroid[0];
+    let driving = &stats.main_entrance_vs_centroid[0];
+    assert_eq!(driving.n, 1, "combo main pairs with combo centroid after folding");
+    assert!((driving.delta_length_m.avg - (len(0.003) - len(0.001)) as f64).abs() < 1.0);
+    // Pair buckets fold the same way: no retired combo type remains.
+    assert!(stats
+        .by_measurement_type_and_entrance_type
+        .iter()
+        .all(|r| !r.attr_a.contains("walking_driving") && !r.attr_a.contains("cycling_driving")));
+    let row = &stats.main_entrance_vs_centroid[1];
     assert_eq!(row.measurement_type, "to_nearest_transit_stop");
     assert_eq!(row.n, 2);
     let d_small = (len(0.002) - len(0.001)) as f64;

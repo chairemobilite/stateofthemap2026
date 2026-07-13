@@ -538,12 +538,18 @@ impl PgStore {
     async fn main_entrance_vs_centroid_deltas(
         pool: &PgPool,
     ) -> Result<Vec<MeasurementDeltaAggregate>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, MeasurementDeltaAggRow>(
+        // Same driving-type folding as the pair buckets, so a main-entrance
+        // walk stored under one of the retired combo types still pairs with
+        // a centroid walk stored under `to_nearest_driving_road`.
+        let folded = Self::stats_bucket_expr("measurement_type");
+        let rows = sqlx::query_as::<_, MeasurementDeltaAggRow>(&format!(
             "WITH mains AS ( \
-                 SELECT bbox_id, measurement_type, length_m::float8 AS len, walking_speed_kmh \
+                 SELECT bbox_id, {folded} AS measurement_type, \
+                        length_m::float8 AS len, walking_speed_kmh \
                  FROM poi_focus_measurements WHERE entrance_type = 'main' \
              ), centroids AS ( \
-                 SELECT bbox_id, measurement_type, length_m::float8 AS len, walking_speed_kmh \
+                 SELECT bbox_id, {folded} AS measurement_type, \
+                        length_m::float8 AS len, walking_speed_kmh \
                  FROM poi_focus_measurements WHERE entrance_type LIKE 'centroid\\_%' \
              ), deltas AS ( \
                  SELECT m.measurement_type, \
@@ -561,7 +567,7 @@ impl PgStore {
                     MIN(ds) AS ds_min, MAX(ds) AS ds_max, AVG(ds) AS ds_avg, \
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY ds) AS ds_med \
              FROM deltas GROUP BY measurement_type ORDER BY measurement_type",
-        )
+        ))
         .fetch_all(pool)
         .await?;
         Ok(rows.into_iter().map(MeasurementDeltaAggRow::into_public).collect())
@@ -638,12 +644,29 @@ impl PgStore {
         })
     }
 
+    /// Stats-only folding: the two combined driving measurement types are
+    /// counted as `to_nearest_driving_road` in every aggregate (their
+    /// walking/cycling legs never changed the measured target, so keeping
+    /// them apart only fragments the tables). Stored rows are untouched.
+    fn stats_bucket_expr(col: &'static str) -> &'static str {
+        if col == "measurement_type" {
+            "CASE WHEN measurement_type IN \
+               ('to_nearest_walking_cycling_driving_network', \
+                'to_nearest_walking_driving_network') \
+             THEN 'to_nearest_driving_road' ELSE measurement_type END"
+        } else {
+            col
+        }
+    }
+
     async fn measurement_pair_bucket(
         pool: &PgPool,
         col_a: &'static str,
         col_b: &'static str,
     ) -> Result<Vec<MeasurementPairAggregate>, sqlx::Error> {
         // `col_a` / `col_b` are fixed identifiers from Rust, not user input.
+        let col_a = Self::stats_bucket_expr(col_a);
+        let col_b = Self::stats_bucket_expr(col_b);
         let sql = format!(
             "SELECT {col_a} AS attr_a, {col_b} AS attr_b, \
                     COUNT(*)::bigint AS n, \
