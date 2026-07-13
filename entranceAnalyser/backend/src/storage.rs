@@ -36,8 +36,9 @@ use uuid::Uuid;
 use crate::bbox::{Bbox, CandidateSource, KeptBbox};
 use crate::focus_measurements::{
     EntranceKind, MeasurementDeltaAggregate, MeasurementFourNumberStats,
-    MeasurementPairAggregate, MeasurementPurpose, MeasurementStartOrigin, PoiFocusMeasurement,
-    PoiFocusMeasurementStats,
+    MeasurementHistogramBin, MeasurementPairAggregate, MeasurementPurpose,
+    MeasurementStartOrigin, PoiFocusMeasurement, PoiFocusMeasurementStats,
+    CENTROID_HISTOGRAM_BIN_M, CENTROID_HISTOGRAM_OVERFLOW_M,
 };
 use crate::measurement_destination_warnings::{
     destination_warnings_by_bbox, main_vs_centroid_endpoint_agreement,
@@ -166,11 +167,32 @@ impl PgStore {
     /// Remove one kept bbox row. `analyses` and `poi_focus_measurements`
     /// rows for the same `bbox_id` cascade automatically (FK `ON DELETE
     /// CASCADE`). Returns whether a row was deleted.
+    ///
+    /// Before deleting, the bbox (and its POI pick, when one exists) is
+    /// copied into `rejected_poi_picks` in the same transaction, so the
+    /// rejection survives the cascade for the per-country stats.
     pub async fn remove_kept(&self, id: Uuid) -> Result<bool, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO rejected_poi_picks \
+                 (bbox_id, center_lon, center_lat, poi, rejected_reason) \
+             SELECT k.id, k.center_lon, k.center_lat, \
+                    NULLIF(a.payload->'poi', 'null'::jsonb), \
+                    a.payload->>'rejected_reason' \
+             FROM kept_bboxes k \
+             LEFT JOIN analyses a ON a.bbox_id = k.id AND a.kind = $2 \
+             WHERE k.id = $1 \
+             ON CONFLICT (bbox_id) DO NOTHING",
+        )
+        .bind(id)
+        .bind(POI_PICK_KIND)
+        .execute(&mut *tx)
+        .await?;
         let res = sqlx::query("DELETE FROM kept_bboxes WHERE id = $1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -529,13 +551,42 @@ impl PgStore {
         let all = self.list_all_poi_focus_measurements().await?;
         let main_entrance_vs_centroid_endpoints =
             main_vs_centroid_endpoint_agreement(&all, match_radius_m);
+        let centroid_to_main_entrance_histogram =
+            Self::centroid_to_main_entrance_histogram(&self.pool).await?;
         Ok(PoiFocusMeasurementStats {
             by_measurement_type_and_entrance_type,
             by_measurement_type_and_start_origin,
             by_entrance_type_and_start_origin,
             main_entrance_vs_centroid,
             main_entrance_vs_centroid_endpoints,
+            centroid_to_main_entrance_histogram,
         })
+    }
+
+    /// Histogram (25 m bins, open-ended last bin at 250 m) of the
+    /// network walking distance from each aggregated centroid to the
+    /// main entrance: `to_nearest_main_entrance` measurements anchored
+    /// on any `centroid_*` entrance kind. Empty bins are omitted.
+    async fn centroid_to_main_entrance_histogram(
+        pool: &PgPool,
+    ) -> Result<Vec<MeasurementHistogramBin>, sqlx::Error> {
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT LEAST((FLOOR(length_m / $1::float8) * $1)::bigint, $2::bigint) \
+                        AS bin_start_m, \
+                    COUNT(*)::bigint AS n \
+             FROM poi_focus_measurements \
+             WHERE measurement_type = 'to_nearest_main_entrance' \
+               AND entrance_type LIKE 'centroid\\_%' \
+             GROUP BY bin_start_m ORDER BY bin_start_m",
+        )
+        .bind(CENTROID_HISTOGRAM_BIN_M)
+        .bind(CENTROID_HISTOGRAM_OVERFLOW_M)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(bin_start_m, n)| MeasurementHistogramBin { bin_start_m, n })
+            .collect())
     }
 
     /// Signed (centroid − main entrance) deltas per `measurement_type`:
@@ -594,11 +645,18 @@ impl PgStore {
         })
     }
 
-    /// Count picked POIs per country, with a per-country "in Quebec"
-    /// sub-count, by point-in-polygon against `admin_boundaries`
-    /// (populated by `scripts/load_admin_boundaries.sh`). POIs matching
-    /// no country polygon — or all POIs when the table is empty — land
-    /// in `unresolved`.
+    /// Count picked POIs per country — Quebec POIs are pulled out into
+    /// their own bucket (`quebec`), since they will be analysed
+    /// separately — by point-in-polygon against `admin_boundaries`
+    /// (populated by `scripts/load_admin_boundaries.sh`). Each point is
+    /// assigned the *nearest* country polygon (a containing polygon has
+    /// distance 0, so this is plain point-in-polygon with a fallback for
+    /// coastal points just outside the 1:10m coastline); `unresolved`
+    /// only happens when the boundary table is empty. Rejected bboxes
+    /// come from the
+    /// `rejected_poi_picks` tombstones (located by bbox centre, since
+    /// some were rejected before a POI was ever picked) and only feed
+    /// the per-country `n_rejected`, not `n`.
     pub async fn aggregate_poi_pick_country_stats(
         &self,
     ) -> Result<PoiPickCountryStats, sqlx::Error> {
@@ -607,21 +665,30 @@ impl PgStore {
                  SELECT ST_SetSRID(ST_MakePoint( \
                             (payload->'poi'->'center'->>0)::float8, \
                             (payload->'poi'->'center'->>1)::float8), 4326) AS pt, \
-                        COALESCE((payload->>'rejected')::boolean, false) AS rejected \
+                        false AS rejected \
                  FROM analyses \
                  WHERE kind = $1 AND jsonb_typeof(payload->'poi') = 'object' \
+                 UNION ALL \
+                 SELECT ST_SetSRID(ST_MakePoint(center_lon, center_lat), 4326), \
+                        true \
+                 FROM rejected_poi_picks \
              ), located AS ( \
                  SELECT p.rejected, c.iso_code, c.name, \
                         EXISTS (SELECT 1 FROM admin_boundaries q \
                                 WHERE q.level = 'region' AND q.iso_code = 'CA-QC' \
                                   AND ST_Contains(q.geom, p.pt)) AS in_quebec \
                  FROM pois p \
-                 LEFT JOIN admin_boundaries c \
-                   ON c.level = 'country' AND ST_Contains(c.geom, p.pt) \
+                 LEFT JOIN LATERAL ( \
+                     SELECT b.iso_code, b.name FROM admin_boundaries b \
+                     WHERE b.level = 'country' \
+                     ORDER BY b.geom <-> p.pt LIMIT 1 \
+                 ) c ON true \
              ) \
-             SELECT iso_code, name, COUNT(*)::bigint AS n, \
-                    COUNT(*) FILTER (WHERE in_quebec)::bigint AS n_in_quebec, \
-                    COUNT(*) FILTER (WHERE rejected)::bigint AS n_rejected \
+             SELECT iso_code, name, \
+                    COUNT(*) FILTER (WHERE NOT rejected AND NOT in_quebec)::bigint AS n, \
+                    COUNT(*) FILTER (WHERE rejected AND NOT in_quebec)::bigint AS n_rejected, \
+                    COUNT(*) FILTER (WHERE NOT rejected AND in_quebec)::bigint AS n_quebec, \
+                    COUNT(*) FILTER (WHERE rejected AND in_quebec)::bigint AS n_quebec_rejected \
              FROM located \
              GROUP BY iso_code, name \
              ORDER BY n DESC, name",
@@ -630,7 +697,12 @@ impl PgStore {
         .fetch_all(&self.pool)
         .await?;
 
-        let total = rows.iter().map(|r| r.n).sum();
+        let total = rows.iter().map(|r| r.n).sum::<i64>();
+        let total_rejected = rows.iter().map(|r| r.n_rejected).sum::<i64>();
+        let quebec = QuebecPoiStats {
+            n: rows.iter().map(|r| r.n_quebec).sum(),
+            n_rejected: rows.iter().map(|r| r.n_quebec_rejected).sum(),
+        };
         // The NULL-country bucket (no polygon matched) becomes `unresolved`.
         let unresolved = rows
             .iter()
@@ -639,12 +711,13 @@ impl PgStore {
             .sum();
         let by_country = rows
             .into_iter()
+            // Countries whose only POIs are in Quebec vanish from the table.
+            .filter(|r| r.n > 0 || r.n_rejected > 0)
             .filter_map(|r| {
                 Some(PoiPickCountryCount {
                     iso_code: r.iso_code?,
                     name: r.name.unwrap_or_default(),
                     n: r.n,
-                    n_in_quebec: r.n_in_quebec,
                     n_rejected: r.n_rejected,
                 })
             })
@@ -652,6 +725,9 @@ impl PgStore {
         Ok(PoiPickCountryStats {
             by_country,
             total,
+            total_rejected,
+            total_with_rejected: total + total_rejected,
+            quebec,
             unresolved,
         })
     }
@@ -861,42 +937,56 @@ pub struct PoiPickPayload {
 }
 
 /// POI counts for one country, returned by
-/// [`PgStore::aggregate_poi_pick_country_stats`]. `n_in_quebec` is the
-/// subset of `n` that also falls inside the Quebec polygon (relevant
-/// for `iso_code = "CA"`; zero elsewhere) — Quebec POIs will be treated
-/// separately in future statistics.
+/// [`PgStore::aggregate_poi_pick_country_stats`]. Quebec POIs are
+/// excluded from these counts (see [`QuebecPoiStats`]) — they will be
+/// treated separately in future statistics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PoiPickCountryCount {
     /// ISO 3166-1 alpha-2 country code from `admin_boundaries`.
     pub iso_code: String,
     pub name: String,
     pub n: i64,
-    pub n_in_quebec: i64,
-    /// Subset of `n` whose pick was rejected by the reviewer.
+    /// Rejected bboxes tombstoned in this country (not part of `n`).
     pub n_rejected: i64,
 }
 
-/// Wire shape of `GET /api/analyses/poi_pick_country_stats`.
+/// Quebec-only POI counts, reported apart from the per-country table
+/// because Quebec POIs are analysed separately.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuebecPoiStats {
+    pub n: i64,
+    pub n_rejected: i64,
+}
+
+/// Wire shape of `GET /api/analyses/poi_pick_country_stats`. All
+/// `total*` fields exclude Quebec POIs, which are reported in `quebec`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PoiPickCountryStats {
-    /// Sorted by `n` descending, then country name.
+    /// Sorted by `n` descending, then country name. Quebec excluded.
     pub by_country: Vec<PoiPickCountryCount>,
-    /// Every picked POI, including unresolved ones.
+    /// Active (non-rejected) picked POIs.
     pub total: i64,
+    /// Rejected bbox tombstones.
+    pub total_rejected: i64,
+    /// `total + total_rejected`.
+    pub total_with_rejected: i64,
+    pub quebec: QuebecPoiStats,
     /// POIs whose center matched no country polygon (always `total`
     /// when `admin_boundaries` has not been loaded yet).
     pub unresolved: i64,
 }
 
 /// Raw grouped row for the country aggregation; `iso_code`/`name` are
-/// `NULL` for POIs outside every loaded country polygon.
+/// `NULL` for POIs outside every loaded country polygon. `n_quebec*`
+/// counts are folded into [`QuebecPoiStats`], not the country table.
 #[derive(sqlx::FromRow)]
 struct PoiCountryAggRow {
     iso_code: Option<String>,
     name: Option<String>,
     n: i64,
-    n_in_quebec: i64,
     n_rejected: i64,
+    n_quebec: i64,
+    n_quebec_rejected: i64,
 }
 
 /// Flat row shape returned by `sqlx::query_as!` — the PostGIS `geom`
