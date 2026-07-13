@@ -163,11 +163,16 @@ pub fn find_measurement_destination_mismatches(
 /// measurements for one destination type: out of `n_pairs` (latest main
 /// endpoint × latest endpoint of each `centroid_*` kind, per POI),
 /// `n_mismatch` land farther apart than the match radius.
+/// `n_pois_without` counts the POIs in scope with **no** measurement of
+/// this type at all — no such destination near the POI, or unknown.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Serialize)]
 pub struct EndpointAgreementStat {
     pub measurement_type: String,
     pub n_pairs: i64,
     pub n_mismatch: i64,
+    /// `default` keeps older cached JSON deserialisable.
+    #[serde(default)]
+    pub n_pois_without: i64,
 }
 
 /// Stats-only folding of the two retired driving combo types (see
@@ -187,8 +192,13 @@ fn fold_driving_combo(purpose: MeasurementPurpose) -> MeasurementPurpose {
 /// `match_radius_m`). Same "latest measurement per (purpose, entrance)"
 /// rule as the warnings above; driving combo types are folded into
 /// `to_nearest_driving_road`. Types with zero pairs are omitted.
+/// `n_pois_in_scope` is the total number of picked POIs the
+/// `measurements` were drawn from; each stat reports how many of them
+/// have no measurement of that type (`n_pois_without` — no such
+/// destination near the POI, or unknown).
 pub fn main_vs_centroid_endpoint_agreement(
     measurements: &[PoiFocusMeasurement],
+    n_pois_in_scope: i64,
     match_radius_m: f64,
 ) -> Vec<EndpointAgreementStat> {
     // Latest endpoint per (bbox, folded purpose, entrance kind).
@@ -241,12 +251,23 @@ pub fn main_vs_centroid_endpoint_agreement(
         }
     }
 
+    // Distinct POIs having ≥1 measurement of each folded type (any
+    // anchor), to derive how many POIs have none.
+    let mut pois_with_type: HashMap<MeasurementPurpose, std::collections::HashSet<Uuid>> =
+        HashMap::new();
+    for (bbox_id, purpose, _) in latest.keys() {
+        pois_with_type.entry(*purpose).or_default().insert(*bbox_id);
+    }
+
     let mut out: Vec<EndpointAgreementStat> = counts
         .into_iter()
         .map(|(purpose, (n_pairs, n_mismatch))| EndpointAgreementStat {
             measurement_type: purpose.as_str().to_string(),
             n_pairs,
             n_mismatch,
+            n_pois_without: (n_pois_in_scope
+                - pois_with_type.get(&purpose).map_or(0, |s| s.len() as i64))
+            .max(0),
         })
         .collect();
     out.sort_by(|a, b| a.measurement_type.cmp(&b.measurement_type));
@@ -370,6 +391,8 @@ mod tests {
                     t0,
                 ),
             ],
+            // 3 POIs in scope, only 1 has transit measurements: 2 without.
+            3,
             DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
         );
         assert_eq!(
@@ -378,6 +401,7 @@ mod tests {
                 measurement_type: "to_nearest_transit_stop".to_string(),
                 n_pairs: 1,
                 n_mismatch: expected_mismatch,
+                n_pois_without: 2,
             }]
         );
     }

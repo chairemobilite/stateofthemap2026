@@ -456,14 +456,21 @@ async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
     // Same walking speed everywhere: duration delta = length delta × 3600 / 5000.
     assert!((row.delta_duration_s.max - d_big * 3600.0 / 5000.0).abs() < 1.0);
 
-    // Centroid → main-entrance histogram: ~11 m, ~111 m, ~334 m walks
-    // land in bins 0, 100 and the open-ended 250 bucket.
+    // Centroid → entrance histogram counts **one walk per POI**,
+    // preferring to_nearest_main_entrance (then the most recent one).
+    // Everything here sits on a single bbox, so only the last
+    // main-entrance walk (~334 m) survives, in the open-ended 250 bin.
     let histogram: Vec<(i64, i64)> = stats
         .centroid_to_main_entrance_histogram
         .iter()
         .map(|b| (b.bin_start_m, b.n))
         .collect();
-    assert_eq!(histogram, [(0, 1), (100, 1), (250, 1)]);
+    assert_eq!(histogram, [(250, 1)]);
+
+    // No Quebec polygon loaded in this test database: the Quebec-only
+    // copies of the endpoint charts and histogram must be empty.
+    assert!(stats.main_entrance_vs_centroid_endpoints_quebec.is_empty());
+    assert!(stats.centroid_to_main_entrance_histogram_quebec.is_empty());
 
     db.cleanup().await.ok();
 }
@@ -622,6 +629,35 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
     store.append(empty).await.unwrap();
     store.write_poi_pick(empty_id, None).await.unwrap();
 
+    // One active Quebec POI (a university) with a centroid →
+    // main-entrance walk, to exercise the Quebec-only copies of the
+    // measurement stats and the place-type buckets.
+    let quebec_bbox = sample_bbox([-72.0, 46.0]);
+    let quebec_id = quebec_bbox.id;
+    store.append(quebec_bbox).await.unwrap();
+    let mut quebec_poi = poi_at([-72.0, 46.0]);
+    quebec_poi
+        .tags
+        .insert("amenity".to_string(), "university".to_string());
+    store
+        .write_poi_pick(quebec_id, Some(&quebec_poi))
+        .await
+        .unwrap();
+    let seg = vec![[-72.0_f64, 46.0_f64], [-72.0005, 46.0]];
+    store
+        .insert_poi_focus_measurement(
+            quebec_id,
+            &seg,
+            5.0,
+            path_length_m_haversine(&seg).unwrap(),
+            MeasurementPurpose::ToNearestMainEntrance,
+            EntranceKind::CentroidMainBuilding,
+            MeasurementStartOrigin::PoiFocusCentroid,
+            None,
+        )
+        .await
+        .unwrap();
+
     let stats = store.aggregate_poi_pick_country_stats().await.unwrap();
     // Rejected picks are tombstoned and no longer count in n/total, and
     // Quebec POIs live in their own bucket: the rejected Montreal bbox
@@ -629,7 +665,7 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
     assert_eq!(stats.total, 3);
     assert_eq!(stats.total_rejected, 0);
     assert_eq!(stats.total_with_rejected, 3);
-    assert_eq!(stats.quebec.n, 0);
+    assert_eq!(stats.quebec.n, 1);
     assert_eq!(stats.quebec.n_rejected, 1);
     assert_eq!(stats.unresolved, 0);
     // Sorted by n descending, then name.
@@ -640,6 +676,36 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
     assert_eq!(stats.by_country[1].iso_code, "AA");
     assert_eq!(stats.by_country[1].n, 1);
     assert_eq!(stats.by_country[1].n_rejected, 0);
+
+    // Quebec-only measurement stats: the ~39 m centroid walk of the
+    // Quebec bbox lands in the 25–50 m histogram bin.
+    let mstats = store
+        .aggregate_poi_focus_measurement_pair_stats(10.0)
+        .await
+        .unwrap();
+    let quebec_bins: Vec<(i64, i64)> = mstats
+        .centroid_to_main_entrance_histogram_quebec
+        .iter()
+        .map(|b| (b.bin_start_m, b.n))
+        .collect();
+    assert_eq!(quebec_bins, [(25, 1)]);
+    // …and stays out of every world-level stat: the only measurement
+    // in this test belongs to the Quebec bbox.
+    assert!(mstats.centroid_to_main_entrance_histogram.is_empty());
+    assert!(mstats.by_measurement_type_and_entrance_type.is_empty());
+    assert!(mstats.main_entrance_vs_centroid_endpoints.is_empty());
+    // No main-entrance walk on that POI: no endpoint pair to chart.
+    assert!(mstats.main_entrance_vs_centroid_endpoints_quebec.is_empty());
+    // Place-type buckets: the single Quebec pick is a university with
+    // one ~39 m centroid → main-entrance measurement.
+    assert_eq!(mstats.quebec_by_place_type.len(), 1);
+    let uni = &mstats.quebec_by_place_type[0];
+    assert_eq!(uni.place_type, "university");
+    assert_eq!(uni.n_pois, 1);
+    assert_eq!(uni.n_measurements, 1);
+    let lm = uni.length_m.as_ref().unwrap();
+    assert!((lm.min - lm.max).abs() < f64::EPSILON);
+    assert!(lm.median > 25.0 && lm.median < 50.0);
 
     db.cleanup().await.ok();
 }

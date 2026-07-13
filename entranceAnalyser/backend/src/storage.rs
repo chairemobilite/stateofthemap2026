@@ -24,6 +24,7 @@
 //!     `write_poi_focus`) — caches the buildings + entrances around the
 //!     picked POI.
 
+use std::collections::HashSet;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
@@ -38,7 +39,7 @@ use crate::focus_measurements::{
     EntranceKind, MeasurementDeltaAggregate, MeasurementFourNumberStats,
     MeasurementHistogramBin, MeasurementPairAggregate, MeasurementPurpose,
     MeasurementStartOrigin, PoiFocusMeasurement, PoiFocusMeasurementStats,
-    CENTROID_HISTOGRAM_BIN_M, CENTROID_HISTOGRAM_OVERFLOW_M,
+    QuebecPlaceTypeStat, CENTROID_HISTOGRAM_BIN_M, CENTROID_HISTOGRAM_OVERFLOW_M,
 };
 use crate::measurement_destination_warnings::{
     destination_warnings_by_bbox, main_vs_centroid_endpoint_agreement,
@@ -548,39 +549,198 @@ impl PgStore {
         )
         .await?;
         let main_entrance_vs_centroid = Self::main_entrance_vs_centroid_deltas(&self.pool).await?;
+        // Quebec POIs are analysed separately: the world-level endpoint
+        // charts exclude their measurements, the Quebec copies keep
+        // only them.
         let all = self.list_all_poi_focus_measurements().await?;
+        let quebec_ids: HashSet<Uuid> =
+            Self::quebec_bbox_ids(&self.pool).await?.into_iter().collect();
+        let (quebec_measurements, world_measurements): (Vec<_>, Vec<_>) = all
+            .into_iter()
+            .partition(|m| quebec_ids.contains(&m.bbox_id));
+        // POI totals per scope, so the endpoint stats can report how
+        // many POIs have no measurement of a given type at all (no
+        // such destination near the POI, or unknown).
+        let (n_pois_world, n_pois_quebec) = Self::poi_pick_counts_by_scope(&self.pool).await?;
         let main_entrance_vs_centroid_endpoints =
-            main_vs_centroid_endpoint_agreement(&all, match_radius_m);
+            main_vs_centroid_endpoint_agreement(&world_measurements, n_pois_world, match_radius_m);
+        let main_entrance_vs_centroid_endpoints_quebec = main_vs_centroid_endpoint_agreement(
+            &quebec_measurements,
+            n_pois_quebec,
+            match_radius_m,
+        );
         let centroid_to_main_entrance_histogram =
-            Self::centroid_to_main_entrance_histogram(&self.pool).await?;
+            Self::centroid_to_main_entrance_histogram(&self.pool, false).await?;
+        let centroid_to_main_entrance_histogram_quebec =
+            Self::centroid_to_main_entrance_histogram(&self.pool, true).await?;
+        let quebec_by_place_type = Self::quebec_place_type_stats(&self.pool).await?;
         Ok(PoiFocusMeasurementStats {
             by_measurement_type_and_entrance_type,
             by_measurement_type_and_start_origin,
             by_entrance_type_and_start_origin,
             main_entrance_vs_centroid,
             main_entrance_vs_centroid_endpoints,
+            main_entrance_vs_centroid_endpoints_quebec,
             centroid_to_main_entrance_histogram,
+            centroid_to_main_entrance_histogram_quebec,
+            quebec_by_place_type,
         })
     }
 
+    /// Quebec picks bucketed by place type, with centroid →
+    /// main-entrance distance aggregates. Categories follow the OSM
+    /// tags of the picked POI (first match wins): university
+    /// (`amenity=university` / `education=university`), cegep
+    /// (`amenity=college` / `education=college`), hospital
+    /// (`amenity=hospital` / `healthcare=hospital`), industrial
+    /// (`building=industrial` / `man_made=works`), else `other`.
+    /// Distances aggregate one centroid → entrance walk per POI (see
+    /// [`Self::CENTROID_ENTRANCE_WALKS_CTE`]).
+    async fn quebec_place_type_stats(
+        pool: &PgPool,
+    ) -> Result<Vec<QuebecPlaceTypeStat>, sqlx::Error> {
+        type Row = (String, i64, i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
+        let rows: Vec<Row> = sqlx::query_as(&format!(
+            "WITH walks AS ({walks}), \
+             quebec_picks AS ( \
+                 SELECT a.bbox_id, a.payload->'poi'->'tags' AS tags \
+                 FROM analyses a \
+                 JOIN kept_bboxes k ON k.id = a.bbox_id \
+                 WHERE a.kind = $1 AND jsonb_typeof(a.payload->'poi') = 'object' \
+                   AND EXISTS (SELECT 1 FROM admin_boundaries q \
+                               WHERE q.level = 'region' AND q.iso_code = 'CA-QC' \
+                                 AND ST_Contains(q.geom, ST_SetSRID( \
+                                     ST_MakePoint(k.center_lon, k.center_lat), 4326))) \
+             ), classified AS ( \
+                 SELECT bbox_id, CASE \
+                     WHEN tags->>'amenity' = 'university' \
+                       OR tags->>'education' = 'university' THEN 'university' \
+                     WHEN tags->>'amenity' = 'college' \
+                       OR tags->>'education' = 'college' THEN 'cegep' \
+                     WHEN tags->>'amenity' = 'hospital' \
+                       OR tags->>'healthcare' = 'hospital' THEN 'hospital' \
+                     WHEN tags->>'building' = 'industrial' \
+                       OR tags->>'man_made' = 'works' THEN 'industrial' \
+                     ELSE 'other' END AS place_type \
+                 FROM quebec_picks \
+             ) \
+             SELECT c.place_type, \
+                    COUNT(DISTINCT c.bbox_id)::bigint AS n_pois, \
+                    COUNT(w.bbox_id)::bigint AS n_measurements, \
+                    MIN(w.length_m)::float8 AS lm_min, \
+                    MAX(w.length_m)::float8 AS lm_max, \
+                    AVG(w.length_m)::float8 AS lm_avg, \
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY w.length_m::float8) AS lm_med \
+             FROM classified c \
+             LEFT JOIN walks w ON w.bbox_id = c.bbox_id \
+             GROUP BY c.place_type \
+             ORDER BY c.place_type",
+            walks = Self::CENTROID_ENTRANCE_WALKS_CTE,
+        ))
+        .bind(POI_PICK_KIND)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(place_type, n_pois, n_measurements, min, max, avg, median)| {
+                // The four aggregates are all Some iff at least one
+                // measurement joined.
+                let length_m = match (min, max, avg, median) {
+                    (Some(min), Some(max), Some(avg), Some(median)) => {
+                        Some(MeasurementFourNumberStats { min, max, avg, median })
+                    }
+                    _ => None,
+                };
+                QuebecPlaceTypeStat {
+                    place_type,
+                    n_pois,
+                    n_measurements,
+                    length_m,
+                }
+            })
+            .collect())
+    }
+
+    /// Kept bboxes whose centre falls inside the Quebec polygon of
+    /// `admin_boundaries` (`level='region'`, `iso_code='CA-QC'`).
+    async fn quebec_bbox_ids(pool: &PgPool) -> Result<Vec<Uuid>, sqlx::Error> {
+        sqlx::query_scalar(&format!(
+            "SELECT k.id FROM kept_bboxes k WHERE {in_quebec}",
+            in_quebec = Self::bbox_in_quebec_sql("k.id"),
+        ))
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Number of picked POIs outside and inside Quebec, in that order
+    /// (same scopes as the endpoint agreement charts).
+    async fn poi_pick_counts_by_scope(pool: &PgPool) -> Result<(i64, i64), sqlx::Error> {
+        sqlx::query_as(&format!(
+            "SELECT COUNT(*) FILTER (WHERE NOT {in_quebec})::bigint, \
+                    COUNT(*) FILTER (WHERE {in_quebec})::bigint \
+             FROM analyses a \
+             WHERE a.kind = $1 AND jsonb_typeof(a.payload->'poi') = 'object'",
+            in_quebec = Self::bbox_in_quebec_sql("a.bbox_id"),
+        ))
+        .bind(POI_PICK_KIND)
+        .fetch_one(pool)
+        .await
+    }
+
+    /// SQL predicate: the kept bbox `bbox_id_col` refers to has its
+    /// centre inside the Quebec polygon of `admin_boundaries`. Quebec
+    /// POIs are analysed separately, so every world-level stat filters
+    /// them out with `NOT <this>` and the Quebec sections use it as-is.
+    fn bbox_in_quebec_sql(bbox_id_col: &str) -> String {
+        format!(
+            "EXISTS (SELECT 1 FROM kept_bboxes kq \
+             JOIN admin_boundaries q \
+               ON q.level = 'region' AND q.iso_code = 'CA-QC' \
+             WHERE kq.id = {bbox_id_col} \
+               AND ST_Contains(q.geom, ST_SetSRID( \
+                   ST_MakePoint(kq.center_lon, kq.center_lat), 4326)))"
+        )
+    }
+
+    /// SQL snippet selecting **one** centroid → entrance measurement
+    /// per bbox: `to_nearest_main_entrance` or `to_nearest_entrance`
+    /// anchored on any `centroid_*` kind, preferring the main-entrance
+    /// type (then the most recent) when a POI has both — so each POI
+    /// counts once in the histogram and the place-type distances.
+    const CENTROID_ENTRANCE_WALKS_CTE: &'static str =
+        "SELECT DISTINCT ON (m.bbox_id) m.bbox_id, m.length_m \
+         FROM poi_focus_measurements m \
+         WHERE m.measurement_type IN \
+               ('to_nearest_main_entrance', 'to_nearest_entrance') \
+           AND m.entrance_type LIKE 'centroid\\_%' \
+         ORDER BY m.bbox_id, \
+                  m.measurement_type = 'to_nearest_main_entrance' DESC, \
+                  m.created_at DESC";
+
     /// Histogram (25 m bins, open-ended last bin at 250 m) of the
     /// network walking distance from each aggregated centroid to the
-    /// main entrance: `to_nearest_main_entrance` measurements anchored
-    /// on any `centroid_*` entrance kind. Empty bins are omitted.
+    /// entrance, one measurement per POI (see
+    /// [`Self::CENTROID_ENTRANCE_WALKS_CTE`]). Empty bins are omitted.
+    /// `quebec_only` restricts to measurements of Quebec bboxes; when
+    /// false, Quebec bboxes are *excluded* (they have their own copy).
     async fn centroid_to_main_entrance_histogram(
         pool: &PgPool,
+        quebec_only: bool,
     ) -> Result<Vec<MeasurementHistogramBin>, sqlx::Error> {
-        let rows: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT LEAST((FLOOR(length_m / $1::float8) * $1)::bigint, $2::bigint) \
+        let rows: Vec<(i64, i64)> = sqlx::query_as(&format!(
+            "WITH walks AS ({walks}) \
+             SELECT LEAST((FLOOR(w.length_m / $1::float8) * $1)::bigint, $2::bigint) \
                         AS bin_start_m, \
                     COUNT(*)::bigint AS n \
-             FROM poi_focus_measurements \
-             WHERE measurement_type = 'to_nearest_main_entrance' \
-               AND entrance_type LIKE 'centroid\\_%' \
+             FROM walks w \
+             WHERE $3 = {in_quebec} \
              GROUP BY bin_start_m ORDER BY bin_start_m",
-        )
+            walks = Self::CENTROID_ENTRANCE_WALKS_CTE,
+            in_quebec = Self::bbox_in_quebec_sql("w.bbox_id"),
+        ))
         .bind(CENTROID_HISTOGRAM_BIN_M)
         .bind(CENTROID_HISTOGRAM_OVERFLOW_M)
+        .bind(quebec_only)
         .fetch_all(pool)
         .await?;
         Ok(rows
@@ -594,7 +754,8 @@ impl PgStore {
     /// from a `centroid_*` anchor is paired with every one drawn from the
     /// `main` entrance, whichever centroid kind was used. The
     /// entrance-targeting types are excluded (they measure *toward* the
-    /// entrance, so the delta is meaningless there).
+    /// entrance, so the delta is meaningless there). Quebec bboxes are
+    /// excluded (analysed separately).
     async fn main_entrance_vs_centroid_deltas(
         pool: &PgPool,
     ) -> Result<Vec<MeasurementDeltaAggregate>, sqlx::Error> {
@@ -602,15 +763,18 @@ impl PgStore {
         // walk stored under one of the retired combo types still pairs with
         // a centroid walk stored under `to_nearest_driving_road`.
         let folded = Self::stats_bucket_expr("measurement_type");
+        let not_in_quebec = format!("NOT {}", Self::bbox_in_quebec_sql("bbox_id"));
         let rows = sqlx::query_as::<_, MeasurementDeltaAggRow>(&format!(
             "WITH mains AS ( \
                  SELECT bbox_id, {folded} AS measurement_type, \
                         length_m::float8 AS len, walking_speed_kmh \
-                 FROM poi_focus_measurements WHERE entrance_type = 'main' \
+                 FROM poi_focus_measurements \
+                 WHERE entrance_type = 'main' AND {not_in_quebec} \
              ), centroids AS ( \
                  SELECT bbox_id, {folded} AS measurement_type, \
                         length_m::float8 AS len, walking_speed_kmh \
-                 FROM poi_focus_measurements WHERE entrance_type LIKE 'centroid\\_%' \
+                 FROM poi_focus_measurements \
+                 WHERE entrance_type LIKE 'centroid\\_%' AND {not_in_quebec} \
              ), deltas AS ( \
                  SELECT m.measurement_type, \
                         c.len - m.len AS dl, \
@@ -747,6 +911,8 @@ impl PgStore {
         }
     }
 
+    /// One (attr_a, attr_b) aggregate table. Quebec bboxes are
+    /// excluded (analysed separately).
     async fn measurement_pair_bucket(
         pool: &PgPool,
         col_a: &'static str,
@@ -768,10 +934,12 @@ impl PgStore {
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY \
                       (length_m::float8 * 3600.0) / (1000.0 * walking_speed_kmh)) AS ds_med \
              FROM poi_focus_measurements \
+             WHERE NOT {in_quebec} \
              GROUP BY {col_a}, {col_b} \
              ORDER BY {col_a}, {col_b}",
             col_a = col_a,
             col_b = col_b,
+            in_quebec = Self::bbox_in_quebec_sql("bbox_id"),
         );
         let rows = sqlx::query_as::<_, MeasurementPairAggRow>(&sql)
             .fetch_all(pool)

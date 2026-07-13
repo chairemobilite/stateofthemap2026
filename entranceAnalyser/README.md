@@ -479,9 +479,14 @@ white scale lines overprinted on the ink only): the share of
 land more than the match radius apart, for **nearest driving road**
 and **nearest transit stop**. Data comes from the
 `main_entrance_vs_centroid_endpoints` field of the same stats
-response (`measurement_type`, `n_pairs`, `n_mismatch`), computed with
-the destination-warning endpoint rule (latest measurement per
-purpose/anchor, `MEASUREMENT_DESTINATION_MATCH_RADIUS_M`).
+response (`measurement_type`, `n_pairs`, `n_mismatch`,
+`n_pois_without`), computed with the destination-warning endpoint rule
+(latest measurement per purpose/anchor,
+`MEASUREMENT_DESTINATION_MATCH_RADIUS_M`). `n_pois_without` counts the
+POIs in scope with no measurement of that type at all; the transit
+chart renders it as a third **"no stop / unknown"** bar (no public
+transit stop near the POI, or not measured), while the driving-road
+chart ignores it — every POI has a road nearby.
 
 The same response also carries `main_entrance_vs_centroid`: per
 `measurement_type`, min / max / mean / median of the **signed delta
@@ -494,10 +499,33 @@ entrance itself).
 
 Finally, `centroid_to_main_entrance_histogram` feeds a Tufte-style
 **histogram of the network walking distance from each aggregated
-centroid to the main entrance** (`to_nearest_main_entrance`
-measurements anchored on any `centroid_*` kind): 25 m bins
+centroid to the entrance**: one measurement per POI —
+`to_nearest_main_entrance` preferred over `to_nearest_entrance` (then
+the most recent), anchored on any `centroid_*` kind — so a POI with
+both types is not double-counted. 25 m bins
 (`bin_start_m`, `n`; empty bins omitted), with everything at 250 m and
 more collected in an open-ended last bin rendered as "250+".
+
+Quebec POIs (kept bboxes whose centre falls inside the Quebec polygon
+of `admin_boundaries`) are analysed separately: **every world-level
+stat above — the three attribute-pair tables, the centroid deltas, the
+endpoint agreement charts and the histogram — excludes their
+measurements.** The endpoint agreement charts and the histogram each
+have a **Quebec-only copy** (`main_entrance_vs_centroid_endpoints_quebec`,
+`centroid_to_main_entrance_histogram_quebec`): the same computations
+restricted to those bboxes.
+
+`quebec_by_place_type` buckets the Quebec picks by OSM tags —
+university (`amenity=university` / `education=university`), cegep
+(`amenity=college` / `education=college`), hospital (`amenity=hospital`
+/ `healthcare=hospital`), industrial (`building=industrial` /
+`man_made=works`), else `other` — with the POI count and min / max /
+mean / median centroid → entrance walking distance per bucket (both
+entrance-targeting measurement types). To
+make this classification possible, keeping a custom-OSM bbox now
+fetches the object's tags from Overpass and stores them on the pick
+(best effort; the pick's group is derived from `poi_tags.yml` when the
+tags match one).
 
 ### POIs per country (Quebec reported separately)
 

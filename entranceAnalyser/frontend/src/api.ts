@@ -542,6 +542,9 @@ export interface EndpointAgreementStat {
     measurement_type: string;
     n_pairs: number;
     n_mismatch: number;
+    /** POIs in scope with no measurement of this type at all (no such
+     *  destination near the POI, or unknown). Missing on older backends. */
+    n_pois_without?: number;
 }
 
 /** Wire shape for `GET /api/analyses/poi_focus_measurement_stats`. */
@@ -551,9 +554,26 @@ export interface PoiFocusMeasurementStats {
     by_entrance_type_and_start_origin: MeasurementPairAggregate[];
     main_entrance_vs_centroid: MeasurementDeltaAggregate[];
     main_entrance_vs_centroid_endpoints: EndpointAgreementStat[];
+    /** Quebec-only copy of `main_entrance_vs_centroid_endpoints`. */
+    main_entrance_vs_centroid_endpoints_quebec?: EndpointAgreementStat[];
     /** 25 m histogram of centroid → main entrance network walking
      *  distances; empty bins omitted. May be missing on older backends. */
     centroid_to_main_entrance_histogram?: MeasurementHistogramBin[];
+    /** Quebec-only copy of `centroid_to_main_entrance_histogram`. */
+    centroid_to_main_entrance_histogram_quebec?: MeasurementHistogramBin[];
+    /** Quebec picks bucketed by place type (university, cegep,
+     *  hospital, industrial, other). Empty buckets omitted. */
+    quebec_by_place_type?: QuebecPlaceTypeStat[];
+}
+
+/** One Quebec place-type bucket: POI count and centroid → main-entrance
+ *  network distance aggregates (`length_m` is null until at least one
+ *  such measurement exists). Mirrors `QuebecPlaceTypeStat`. */
+export interface QuebecPlaceTypeStat {
+    place_type: string;
+    n_pois: number;
+    n_measurements: number;
+    length_m: MeasurementFourNumberStats | null;
 }
 
 /** `GET /api/analyses/poi_focus_measurement_stats` — global aggregates by attribute pairs. */
