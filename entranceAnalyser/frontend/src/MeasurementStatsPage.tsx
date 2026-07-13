@@ -146,12 +146,13 @@ function EndpointAgreementCharts({
     rows,
     matchRadiusM,
 }: {
-    rows: EndpointAgreementStat[];
+    /** May be missing when talking to a backend older than this field. */
+    rows: EndpointAgreementStat[] | undefined;
     matchRadiusM: number;
 }) {
     const charts = ENDPOINT_CHART_TYPES.map(([type, title]) => ({
         title,
-        stat: rows.find((r) => r.measurement_type === type),
+        stat: rows?.find((r) => r.measurement_type === type),
     }));
     return (
         <section className="measurement-stats__section">
