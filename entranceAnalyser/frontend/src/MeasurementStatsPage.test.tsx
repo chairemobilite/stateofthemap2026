@@ -95,14 +95,14 @@ describe('<MeasurementStatsPage />', () => {
     });
 
     it.each([
-        ['CA row shows the Quebec subset', 'Canada', '2'],
-        ['non-CA row shows a dash instead of a Quebec count', 'France', '—'],
-    ])('POIs per country table: %s', async (_label, countryName, quebecCell) => {
+        ['CA row shows the Quebec subset', 'Canada', '2', '1'],
+        ['non-CA row shows a dash instead of a Quebec count', 'France', '—', '0'],
+    ])('POIs per country table: %s', async (_label, countryName, quebecCell, rejectedCell) => {
         vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
         vi.mocked(fetchPoiPickCountryStats).mockResolvedValue({
             by_country: [
-                { iso_code: 'CA', name: 'Canada', n: 3, n_in_quebec: 2 },
-                { iso_code: 'FR', name: 'France', n: 1, n_in_quebec: 0 },
+                { iso_code: 'CA', name: 'Canada', n: 3, n_in_quebec: 2, n_rejected: 1 },
+                { iso_code: 'FR', name: 'France', n: 1, n_in_quebec: 0, n_rejected: 0 },
             ],
             total: 5,
             unresolved: 1,
@@ -122,7 +122,9 @@ describe('<MeasurementStatsPage />', () => {
 
         const row = screen.getByText(countryName).closest('tr');
         expect(row).not.toBeNull();
-        expect(row!.lastElementChild).toHaveTextContent(quebecCell);
+        // Cells: country | POIs | in Quebec | rejected.
+        expect(row!.children[2]).toHaveTextContent(quebecCell);
+        expect(row!.children[3]).toHaveTextContent(rejectedCell);
         expect(screen.getByText(/5 POI\(s\) total/)).toBeInTheDocument();
         expect(screen.getByText(/1 outside every loaded country boundary/)).toBeInTheDocument();
     });

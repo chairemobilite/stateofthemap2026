@@ -570,6 +570,8 @@ export interface PoiPickCountryCount {
     name: string;
     n: number;
     n_in_quebec: number;
+    /** Subset of `n` whose pick was rejected by the reviewer. */
+    n_rejected: number;
 }
 
 /** Wire shape for `GET /api/analyses/poi_pick_country_stats`. */

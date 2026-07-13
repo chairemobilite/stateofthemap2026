@@ -576,13 +576,27 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
         tags: BTreeMap::new(),
         group: "shop".into(),
     };
-    // (POI center, expectation): Alphaland; Canada in Quebec; Canada
-    // outside Quebec; middle of the Pacific (unresolved).
-    for center in [[5.0, 5.0], [-73.55, 45.55], [-65.0, 42.0], [-150.0, 0.0]] {
+    // (POI center, rejected): Alphaland; Canada in Quebec (rejected);
+    // Canada outside Quebec; middle of the Pacific (unresolved).
+    for (center, rejected) in [
+        ([5.0, 5.0], false),
+        ([-73.55, 45.55], true),
+        ([-65.0, 42.0], false),
+        ([-150.0, 0.0], false),
+    ] {
         let bbox = sample_bbox(center);
         let id = bbox.id;
         store.append(bbox).await.unwrap();
         store.write_poi_pick(id, Some(&poi_at(center))).await.unwrap();
+        if rejected {
+            store
+                .set_poi_pick_rejection(
+                    id,
+                    Some(entrance_analyser_backend::storage::PoiRejectionReason::Obsolete),
+                )
+                .await
+                .unwrap();
+        }
     }
     // A cached "no POI in this cell" row must not count.
     let empty = sample_bbox([5.0, 6.0]);
@@ -598,9 +612,11 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
     assert_eq!(stats.by_country[0].iso_code, "CA");
     assert_eq!(stats.by_country[0].n, 2);
     assert_eq!(stats.by_country[0].n_in_quebec, 1);
+    assert_eq!(stats.by_country[0].n_rejected, 1);
     assert_eq!(stats.by_country[1].iso_code, "AA");
     assert_eq!(stats.by_country[1].n, 1);
     assert_eq!(stats.by_country[1].n_in_quebec, 0);
+    assert_eq!(stats.by_country[1].n_rejected, 0);
 
     db.cleanup().await.ok();
 }

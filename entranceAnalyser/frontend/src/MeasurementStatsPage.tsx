@@ -285,6 +285,7 @@ function PoiCountryStatsSection({ stats }: { stats: PoiPickCountryStats }) {
                                     <th>Country</th>
                                     <th className="measurement-stats__num">POIs</th>
                                     <th className="measurement-stats__num">in Quebec</th>
+                                    <th className="measurement-stats__num">rejected</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -296,6 +297,9 @@ function PoiCountryStatsSection({ stats }: { stats: PoiPickCountryStats }) {
                                         <td className="measurement-stats__num">{row.n}</td>
                                         <td className="measurement-stats__num">
                                             {row.iso_code === 'CA' ? row.n_in_quebec : '—'}
+                                        </td>
+                                        <td className="measurement-stats__num">
+                                            {row.n_rejected}
                                         </td>
                                     </tr>
                                 ))}
