@@ -1024,6 +1024,55 @@ body {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
+/* Tufte-style bar charts: bar ink carries the data, thin white lines
+   overprinted on the bars are the only scale marks (they must match
+   the section background so they disappear outside the ink). */
+.measurement-stats__charts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2.5rem;
+}
+
+.tufte-chart {
+    margin: 0;
+}
+
+.tufte-chart figcaption {
+    margin-bottom: 0.5rem;
+}
+
+.tufte-chart__title {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.tufte-chart__subtitle {
+    display: block;
+    font-size: 0.75rem;
+    color: #64748b;
+}
+
+.tufte-chart__bar {
+    fill: #475569;
+}
+
+.tufte-chart__gridline {
+    stroke: #fff;
+    stroke-width: 1.5;
+}
+
+.tufte-chart__value {
+    font-size: 0.8rem;
+    font-weight: 600;
+    fill: #111;
+}
+
+.tufte-chart__label {
+    font-size: 0.72rem;
+    fill: #334155;
+}
+
 .measurement-stats__h2 {
     margin: 0 0 0.65rem;
     font-size: 1rem;

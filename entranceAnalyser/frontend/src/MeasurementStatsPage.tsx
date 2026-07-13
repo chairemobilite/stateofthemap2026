@@ -15,6 +15,7 @@ import {
     fetchPoiFocusMeasurementDestinationWarnings,
     fetchPoiFocusMeasurementStats,
     fetchPoiPickCountryStats,
+    type EndpointAgreementStat,
     type MeasurementDeltaAggregate,
     type MeasurementPairAggregate,
     type PoiFocusMeasurementStats,
@@ -26,6 +27,7 @@ import {
     type DestinationWarningRow,
 } from './keptBboxes/measurementDestinationWarnings';
 import { formatMinutesSeconds } from './measurementStatsFormat';
+import { TufteBarChart } from './TufteBarChart';
 
 export interface MeasurementStatsPageProps {
     /** Open the focus map for one kept bbox (wired from `App`). */
@@ -129,6 +131,61 @@ function StatPairTable({
                         ))}
                     </tbody>
                 </table>
+            </div>
+        </section>
+    );
+}
+
+/** Destination types charted, with their display titles. */
+const ENDPOINT_CHART_TYPES: ReadonlyArray<[string, string]> = [
+    ['to_nearest_driving_road', 'Nearest driving road'],
+    ['to_nearest_transit_stop', 'Nearest transit stop'],
+];
+
+function EndpointAgreementCharts({
+    rows,
+    matchRadiusM,
+}: {
+    rows: EndpointAgreementStat[];
+    matchRadiusM: number;
+}) {
+    const charts = ENDPOINT_CHART_TYPES.map(([type, title]) => ({
+        title,
+        stat: rows.find((r) => r.measurement_type === type),
+    }));
+    return (
+        <section className="measurement-stats__section">
+            <h2 className="measurement-stats__h2">
+                Do centroid walks end on the same point as main-entrance walks?
+            </h2>
+            <p className="measurement-stats__section-note">
+                Share of (main entrance, centroid) walk pairs of the same POI whose endpoints
+                land more than <strong>{matchRadiusM} m</strong> apart (any centroid kind).
+            </p>
+            <div className="measurement-stats__charts">
+                {charts.map(({ title, stat }) =>
+                    stat && stat.n_pairs > 0 ? (
+                        <TufteBarChart
+                            key={title}
+                            title={title}
+                            subtitle={`${stat.n_pairs} pair(s)`}
+                            bars={[
+                                {
+                                    label: 'same point',
+                                    value: (100 * (stat.n_pairs - stat.n_mismatch)) / stat.n_pairs,
+                                },
+                                {
+                                    label: 'different point',
+                                    value: (100 * stat.n_mismatch) / stat.n_pairs,
+                                },
+                            ]}
+                        />
+                    ) : (
+                        <p key={title} className="measurement-stats__empty">
+                            {title}: no (main, centroid) pair yet.
+                        </p>
+                    ),
+                )}
             </div>
         </section>
     );
@@ -403,6 +460,10 @@ export function MeasurementStatsPage({
                         matchRadiusM={matchRadiusM}
                         onOpenPoiFocus={onOpenPoiFocus}
                         poiLabelForBbox={poiLabelForBbox}
+                    />
+                    <EndpointAgreementCharts
+                        rows={stats.main_entrance_vs_centroid_endpoints}
+                        matchRadiusM={matchRadiusM}
                     />
                     <CentroidDeltaTable rows={stats.main_entrance_vs_centroid} />
                     <StatPairTable

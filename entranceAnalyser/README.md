@@ -473,6 +473,16 @@ tables comparing centroid-anchored vs entrance-anchored walks; it does
 **not** include the destination-mismatch warnings above — use the
 dedicated endpoint for those.
 
+The Stats tab opens with two **Tufte-style bar charts** (bars with
+white scale lines overprinted on the ink only): the share of
+(main entrance, centroid) walk pairs of the same POI whose endpoints
+land more than the match radius apart, for **nearest driving road**
+and **nearest transit stop**. Data comes from the
+`main_entrance_vs_centroid_endpoints` field of the same stats
+response (`measurement_type`, `n_pairs`, `n_mismatch`), computed with
+the destination-warning endpoint rule (latest measurement per
+purpose/anchor, `MEASUREMENT_DESTINATION_MATCH_RADIUS_M`).
+
 The same response also carries `main_entrance_vs_centroid`: per
 `measurement_type`, min / max / mean / median of the **signed delta
 (centroid − main entrance)** in length and duration, over every

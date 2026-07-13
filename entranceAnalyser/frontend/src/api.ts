@@ -536,12 +536,21 @@ export interface MeasurementDeltaAggregate {
     delta_duration_s: MeasurementFourNumberStats;
 }
 
+/** Endpoint agreement between centroid- and main-entrance-anchored walks
+ *  for one destination type. Mirrors `EndpointAgreementStat`. */
+export interface EndpointAgreementStat {
+    measurement_type: string;
+    n_pairs: number;
+    n_mismatch: number;
+}
+
 /** Wire shape for `GET /api/analyses/poi_focus_measurement_stats`. */
 export interface PoiFocusMeasurementStats {
     by_measurement_type_and_entrance_type: MeasurementPairAggregate[];
     by_measurement_type_and_start_origin: MeasurementPairAggregate[];
     by_entrance_type_and_start_origin: MeasurementPairAggregate[];
     main_entrance_vs_centroid: MeasurementDeltaAggregate[];
+    main_entrance_vs_centroid_endpoints: EndpointAgreementStat[];
 }
 
 /** `GET /api/analyses/poi_focus_measurement_stats` — global aggregates by attribute pairs. */
