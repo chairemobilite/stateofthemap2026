@@ -159,6 +159,100 @@ pub fn find_measurement_destination_mismatches(
     warnings
 }
 
+/// Endpoint agreement between main-entrance and centroid-anchored
+/// measurements for one destination type: out of `n_pairs` (latest main
+/// endpoint × latest endpoint of each `centroid_*` kind, per POI),
+/// `n_mismatch` land farther apart than the match radius.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Serialize)]
+pub struct EndpointAgreementStat {
+    pub measurement_type: String,
+    pub n_pairs: i64,
+    pub n_mismatch: i64,
+}
+
+/// Stats-only folding of the two retired driving combo types (see
+/// `PgStore::stats_bucket_expr` for the SQL twin of this rule).
+fn fold_driving_combo(purpose: MeasurementPurpose) -> MeasurementPurpose {
+    match purpose {
+        MeasurementPurpose::ToNearestWalkingCyclingDrivingNetwork
+        | MeasurementPurpose::ToNearestWalkingDrivingNetwork => {
+            MeasurementPurpose::ToNearestDrivingRoad
+        }
+        other => other,
+    }
+}
+
+/// Per destination type, how often the centroid-anchored walk ends on a
+/// different point than the main-entrance walk of the same POI (beyond
+/// `match_radius_m`). Same "latest measurement per (purpose, entrance)"
+/// rule as the warnings above; driving combo types are folded into
+/// `to_nearest_driving_road`. Types with zero pairs are omitted.
+pub fn main_vs_centroid_endpoint_agreement(
+    measurements: &[PoiFocusMeasurement],
+    match_radius_m: f64,
+) -> Vec<EndpointAgreementStat> {
+    // Latest endpoint per (bbox, folded purpose, entrance kind).
+    let mut latest: HashMap<(Uuid, MeasurementPurpose, EntranceKind), &PoiFocusMeasurement> =
+        HashMap::new();
+    for m in measurements {
+        if !is_comparable(m.measurement_type) || m.coordinates.is_empty() {
+            continue;
+        }
+        let key = (m.bbox_id, fold_driving_combo(m.measurement_type), m.entrance_type);
+        latest
+            .entry(key)
+            .and_modify(|prev| {
+                if m.created_at > prev.created_at {
+                    *prev = m;
+                }
+            })
+            .or_insert(m);
+    }
+
+    let is_centroid = |k: EntranceKind| {
+        matches!(
+            k,
+            EntranceKind::CentroidMainBuilding
+                | EntranceKind::CentroidMultipleBuildings
+                | EntranceKind::CentroidArea
+                | EntranceKind::CentroidParcel
+        )
+    };
+
+    let mut counts: HashMap<MeasurementPurpose, (i64, i64)> = HashMap::new();
+    for ((bbox_id, purpose, entrance), m) in &latest {
+        if !is_centroid(*entrance) {
+            continue;
+        }
+        let Some(main) = latest.get(&(*bbox_id, *purpose, EntranceKind::Main)) else {
+            continue;
+        };
+        let (Some(end_c), Some(end_m)) = (
+            measurement_endpoint(&m.coordinates),
+            measurement_endpoint(&main.coordinates),
+        ) else {
+            continue;
+        };
+        let dist = haversine_distance_m(end_c[0], end_c[1], end_m[0], end_m[1]);
+        let entry = counts.entry(*purpose).or_insert((0, 0));
+        entry.0 += 1;
+        if dist > match_radius_m {
+            entry.1 += 1;
+        }
+    }
+
+    let mut out: Vec<EndpointAgreementStat> = counts
+        .into_iter()
+        .map(|(purpose, (n_pairs, n_mismatch))| EndpointAgreementStat {
+            measurement_type: purpose.as_str().to_string(),
+            n_pairs,
+            n_mismatch,
+        })
+        .collect();
+    out.sort_by(|a, b| a.measurement_type.cmp(&b.measurement_type));
+    out
+}
+
 /// Group measurements by `bbox_id` and return only POIs with ≥1 warning.
 pub fn destination_warnings_by_bbox(
     measurements: &[PoiFocusMeasurement],
@@ -254,6 +348,38 @@ mod tests {
             MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
         );
         assert!(warnings.is_empty());
+    }
+
+    /// (centroid endpoint, expected mismatches): ~1 m away agrees, ~80 m
+    /// away mismatches.
+    #[rstest::rstest]
+    #[case([-73.569_01, 45.501_00], 0)]
+    #[case([-73.568_00, 45.501_00], 1)]
+    fn endpoint_agreement_counts_pairs_and_mismatches(
+        #[case] centroid_end: [f64; 2],
+        #[case] expected_mismatch: i64,
+    ) {
+        let t0 = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let main_end = [-73.569, 45.501];
+        let rows = main_vs_centroid_endpoint_agreement(
+            &[
+                sample(EntranceKind::Main, vec![[-73.57, 45.5], main_end], t0),
+                sample(
+                    EntranceKind::CentroidMainBuilding,
+                    vec![[-73.57, 45.5], centroid_end],
+                    t0,
+                ),
+            ],
+            DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
+        );
+        assert_eq!(
+            rows,
+            vec![EndpointAgreementStat {
+                measurement_type: "to_nearest_transit_stop".to_string(),
+                n_pairs: 1,
+                n_mismatch: expected_mismatch,
+            }]
+        );
     }
 
     #[test]

@@ -733,7 +733,9 @@ async fn poi_focus_measurement_stats_handler(
 ) -> Result<Json<PoiFocusMeasurementStats>, ApiError> {
     let stats = state
         .store
-        .aggregate_poi_focus_measurement_pair_stats()
+        .aggregate_poi_focus_measurement_pair_stats(
+            state.config.measurement_destination_match_radius_m,
+        )
         .await
         .map_err(internal)?;
     Ok(Json(stats))

@@ -315,6 +315,11 @@ pub struct PoiFocusMeasurementStats {
     /// JSON deserialisable.
     #[serde(default)]
     pub main_entrance_vs_centroid: Vec<MeasurementDeltaAggregate>,
+    /// Endpoint agreement (same/different destination point) between
+    /// centroid- and main-entrance-anchored walks, per measurement type.
+    #[serde(default)]
+    pub main_entrance_vs_centroid_endpoints:
+        Vec<crate::measurement_destination_warnings::EndpointAgreementStat>,
 }
 
 /// One persisted polyline from the focus-map measurement tool.
