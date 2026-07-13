@@ -29,6 +29,7 @@ const EMPTY_STATS = {
     by_measurement_type_and_start_origin: [],
     by_entrance_type_and_start_origin: [],
     main_entrance_vs_centroid: [],
+    main_entrance_vs_centroid_endpoints: [],
 };
 
 const EMPTY_COUNTRY_STATS = { by_country: [], total: 0, unresolved: 0 };
@@ -125,6 +126,41 @@ describe('<MeasurementStatsPage />', () => {
         expect(screen.getByText(/5 POI\(s\) total/)).toBeInTheDocument();
         expect(screen.getByText(/1 outside every loaded country boundary/)).toBeInTheDocument();
     });
+
+    it.each([
+        ['driving road: 1 of 4 pairs mismatch', 'to_nearest_driving_road', 'Nearest driving road', 4, 1, '75%', '25%'],
+        ['transit stop: all 2 pairs mismatch', 'to_nearest_transit_stop', 'Nearest transit stop', 2, 2, '0%', '100%'],
+    ])(
+        'endpoint agreement chart — %s',
+        async (_label, type, title, nPairs, nMismatch, samePct, diffPct) => {
+            vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
+                ...EMPTY_STATS,
+                main_entrance_vs_centroid_endpoints: [
+                    { measurement_type: type, n_pairs: nPairs, n_mismatch: nMismatch },
+                ],
+            });
+            vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+            vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({
+                warnings: [],
+            });
+            vi.mocked(fetchAppConfig).mockResolvedValue({
+                osm_editor_url: 'https://example.org/edit',
+                poi_focus_radius_m: 150,
+                measurement_destination_match_radius_m: 10,
+            });
+
+            render(<MeasurementStatsPage />);
+
+            await waitFor(() => {
+                expect(screen.getByRole('img', { name: title })).toBeInTheDocument();
+            });
+
+            const chart = screen.getByRole('img', { name: title });
+            expect(chart).toHaveTextContent(samePct);
+            expect(chart).toHaveTextContent(diffPct);
+            expect(screen.getByText(`${nPairs} pair(s)`)).toBeInTheDocument();
+        },
+    );
 
     it('renders centroid-vs-main deltas per measurement type', async () => {
         const four = (v: number) => ({ min: v, max: v, avg: v, median: v });
