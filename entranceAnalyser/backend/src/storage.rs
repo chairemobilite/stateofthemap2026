@@ -35,8 +35,9 @@ use uuid::Uuid;
 
 use crate::bbox::{Bbox, CandidateSource, KeptBbox};
 use crate::focus_measurements::{
-    EntranceKind, MeasurementFourNumberStats, MeasurementPairAggregate, MeasurementPurpose,
-    MeasurementStartOrigin, PoiFocusMeasurement, PoiFocusMeasurementStats,
+    EntranceKind, MeasurementDeltaAggregate, MeasurementFourNumberStats,
+    MeasurementPairAggregate, MeasurementPurpose, MeasurementStartOrigin, PoiFocusMeasurement,
+    PoiFocusMeasurementStats,
 };
 use crate::measurement_destination_warnings::{
     destination_warnings_by_bbox, PoiFocusMeasurementDestinationWarningsResponse,
@@ -519,11 +520,51 @@ impl PgStore {
             "start_origin",
         )
         .await?;
+        let main_entrance_vs_centroid = Self::main_entrance_vs_centroid_deltas(&self.pool).await?;
         Ok(PoiFocusMeasurementStats {
             by_measurement_type_and_entrance_type,
             by_measurement_type_and_start_origin,
             by_entrance_type_and_start_origin,
+            main_entrance_vs_centroid,
         })
+    }
+
+    /// Signed (centroid − main entrance) deltas per `measurement_type`:
+    /// within one bbox and one measurement type, every measurement drawn
+    /// from a `centroid_*` anchor is paired with every one drawn from the
+    /// `main` entrance, whichever centroid kind was used. The
+    /// entrance-targeting types are excluded (they measure *toward* the
+    /// entrance, so the delta is meaningless there).
+    async fn main_entrance_vs_centroid_deltas(
+        pool: &PgPool,
+    ) -> Result<Vec<MeasurementDeltaAggregate>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, MeasurementDeltaAggRow>(
+            "WITH mains AS ( \
+                 SELECT bbox_id, measurement_type, length_m::float8 AS len, walking_speed_kmh \
+                 FROM poi_focus_measurements WHERE entrance_type = 'main' \
+             ), centroids AS ( \
+                 SELECT bbox_id, measurement_type, length_m::float8 AS len, walking_speed_kmh \
+                 FROM poi_focus_measurements WHERE entrance_type LIKE 'centroid\\_%' \
+             ), deltas AS ( \
+                 SELECT m.measurement_type, \
+                        c.len - m.len AS dl, \
+                        (c.len * 3600.0) / (1000.0 * c.walking_speed_kmh) \
+                          - (m.len * 3600.0) / (1000.0 * m.walking_speed_kmh) AS ds \
+                 FROM mains m \
+                 JOIN centroids c USING (bbox_id, measurement_type) \
+                 WHERE m.measurement_type NOT IN \
+                       ('to_nearest_entrance', 'to_nearest_main_entrance') \
+             ) \
+             SELECT measurement_type, COUNT(*)::bigint AS n, \
+                    MIN(dl) AS dl_min, MAX(dl) AS dl_max, AVG(dl) AS dl_avg, \
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY dl) AS dl_med, \
+                    MIN(ds) AS ds_min, MAX(ds) AS ds_max, AVG(ds) AS ds_avg, \
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY ds) AS ds_med \
+             FROM deltas GROUP BY measurement_type ORDER BY measurement_type",
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows.into_iter().map(MeasurementDeltaAggRow::into_public).collect())
     }
 
     /// Destination mismatch warnings for every kept bbox that has at least
@@ -641,6 +682,41 @@ struct MeasurementRow {
     start_origin: String,
     start_osm_node_id: Option<i64>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct MeasurementDeltaAggRow {
+    measurement_type: String,
+    n: i64,
+    dl_min: f64,
+    dl_max: f64,
+    dl_avg: f64,
+    dl_med: f64,
+    ds_min: f64,
+    ds_max: f64,
+    ds_avg: f64,
+    ds_med: f64,
+}
+
+impl MeasurementDeltaAggRow {
+    fn into_public(self) -> MeasurementDeltaAggregate {
+        MeasurementDeltaAggregate {
+            measurement_type: self.measurement_type,
+            n: self.n,
+            delta_length_m: MeasurementFourNumberStats {
+                min: self.dl_min,
+                max: self.dl_max,
+                avg: self.dl_avg,
+                median: self.dl_med,
+            },
+            delta_duration_s: MeasurementFourNumberStats {
+                min: self.ds_min,
+                max: self.ds_max,
+                avg: self.ds_avg,
+                median: self.ds_med,
+            },
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
