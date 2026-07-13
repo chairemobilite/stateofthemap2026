@@ -181,6 +181,41 @@ describe('<MeasurementStatsPage />', () => {
         },
     );
 
+    it('adds a "no stop / unknown" bar to the transit chart for POIs without a measurement', async () => {
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
+            ...EMPTY_STATS,
+            main_entrance_vs_centroid_endpoints: [
+                // 1 pair (matching) + 3 POIs without any transit
+                // measurement → 25% / 0% / 75% of 4 POIs.
+                {
+                    measurement_type: 'to_nearest_transit_stop',
+                    n_pairs: 1,
+                    n_mismatch: 0,
+                    n_pois_without: 3,
+                },
+            ],
+        });
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('img', { name: 'Nearest transit stop' })).toBeInTheDocument();
+        });
+
+        const chart = screen.getByRole('img', { name: 'Nearest transit stop' });
+        expect(chart).toHaveTextContent('no stop / unknown');
+        expect(chart).toHaveTextContent('25%');
+        expect(chart).toHaveTextContent('75%');
+        expect(screen.getByText('1 pair(s), 3 POI(s) without')).toBeInTheDocument();
+    });
+
     it('renders centroid-vs-main deltas per measurement type', async () => {
         const four = (v: number) => ({ min: v, max: v, avg: v, median: v });
         vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
@@ -267,8 +302,81 @@ describe('<MeasurementStatsPage />', () => {
         render(<MeasurementStatsPage />);
 
         await waitFor(() => {
-            expect(screen.getByText('No centroid measurements yet.')).toBeInTheDocument();
+            // Two empty histogram sections: worldwide and Quebec-only.
+            expect(screen.getAllByText('No centroid measurements yet.')).toHaveLength(2);
         });
+    });
+
+    it('renders the Quebec-only copies of the endpoint charts and histogram', async () => {
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
+            ...EMPTY_STATS,
+            main_entrance_vs_centroid_endpoints_quebec: [
+                { measurement_type: 'to_nearest_transit_stop', n_pairs: 2, n_mismatch: 1 },
+            ],
+            centroid_to_main_entrance_histogram_quebec: [{ bin_start_m: 25, n: 2 }],
+        });
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole('img', { name: 'Nearest transit stop (Quebec)' }),
+            ).toBeInTheDocument();
+        });
+
+        const chart = screen.getByRole('img', { name: 'Nearest transit stop (Quebec)' });
+        expect(chart).toHaveTextContent('50%');
+        const histogram = screen.getByRole('img', { name: 'Centroid → main entrance (Quebec)' });
+        expect(histogram).toHaveTextContent('25–50');
+        expect(screen.getByText('2 measurement(s)')).toBeInTheDocument();
+    });
+
+    it('renders the Quebec place-type table with distance aggregates', async () => {
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
+            ...EMPTY_STATS,
+            quebec_by_place_type: [
+                {
+                    place_type: 'university',
+                    n_pois: 2,
+                    n_measurements: 3,
+                    length_m: { min: 10, max: 80, avg: 40, median: 30 },
+                },
+                { place_type: 'hospital', n_pois: 1, n_measurements: 0, length_m: null },
+            ],
+        });
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Quebec POIs by place type')).toBeInTheDocument();
+        });
+
+        const uniRow = screen.getByText('Universities').closest('tr')!;
+        // Cells: label | POIs | measurements | min | max | avg | median.
+        expect(uniRow.children[1]).toHaveTextContent('2');
+        expect(uniRow.children[2]).toHaveTextContent('3');
+        expect(uniRow.children[3]).toHaveTextContent('10.0');
+        expect(uniRow.children[6]).toHaveTextContent('30.0');
+        // No measurement yet: dashes instead of numbers.
+        const hospitalRow = screen.getByText('Hospitals').closest('tr')!;
+        expect(hospitalRow.children[1]).toHaveTextContent('1');
+        expect(hospitalRow.children[3]).toHaveTextContent('—');
+        // Buckets absent from the payload are not rendered.
+        expect(screen.queryByText('Industrial')).not.toBeInTheDocument();
     });
 
     it('shows empty state when there are no destination mismatches', async () => {

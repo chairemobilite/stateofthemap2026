@@ -337,12 +337,39 @@ pub struct PoiFocusMeasurementStats {
     #[serde(default)]
     pub main_entrance_vs_centroid_endpoints:
         Vec<crate::measurement_destination_warnings::EndpointAgreementStat>,
+    /// Same as `main_entrance_vs_centroid_endpoints`, restricted to
+    /// bboxes whose centre is inside the Quebec polygon (Quebec POIs
+    /// are analysed separately).
+    #[serde(default)]
+    pub main_entrance_vs_centroid_endpoints_quebec:
+        Vec<crate::measurement_destination_warnings::EndpointAgreementStat>,
     /// Histogram of the network walking distance from each aggregated
     /// centroid to the main entrance (`to_nearest_main_entrance`
     /// measurements anchored on a `centroid_*` entrance kind), in
     /// [`CENTROID_HISTOGRAM_BIN_M`]-metre bins; empty bins are omitted.
     #[serde(default)]
     pub centroid_to_main_entrance_histogram: Vec<MeasurementHistogramBin>,
+    /// Same histogram, restricted to Quebec bboxes.
+    #[serde(default)]
+    pub centroid_to_main_entrance_histogram_quebec: Vec<MeasurementHistogramBin>,
+    /// Quebec picks bucketed by place type (university, cegep,
+    /// hospital, industrial, other) with centroid → main-entrance
+    /// distance aggregates. Empty buckets are omitted.
+    #[serde(default)]
+    pub quebec_by_place_type: Vec<QuebecPlaceTypeStat>,
+}
+
+/// One Quebec place-type bucket: how many picked POIs match the
+/// category's OSM tags, and the min/max/mean/median of the network
+/// walking distance from the aggregated centroid to the main entrance
+/// (`to_nearest_main_entrance` measurements anchored on `centroid_*`).
+/// `length_m` is `None` while no such measurement exists yet.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuebecPlaceTypeStat {
+    pub place_type: String,
+    pub n_pois: i64,
+    pub n_measurements: i64,
+    pub length_m: Option<MeasurementFourNumberStats>,
 }
 
 /// One persisted polyline from the focus-map measurement tool.

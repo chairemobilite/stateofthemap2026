@@ -21,6 +21,7 @@ import {
     type MeasurementPairAggregate,
     type PoiFocusMeasurementStats,
     type PoiPickCountryStats,
+    type QuebecPlaceTypeStat,
 } from './api';
 import {
     DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
@@ -165,28 +166,33 @@ function denseHistogramBins(rows: MeasurementHistogramBin[]): TufteHistogramBin[
 
 function CentroidDistanceHistogramSection({
     rows,
+    heading = 'Network distance from centroid to main entrance',
+    chartTitle = 'Centroid → main entrance',
 }: {
     /** May be missing when talking to a backend older than this field. */
     rows: MeasurementHistogramBin[] | undefined;
+    /** Section heading override (e.g. the Quebec-only copy). */
+    heading?: string;
+    chartTitle?: string;
 }) {
     const total = rows?.reduce((sum, r) => sum + r.n, 0) ?? 0;
     return (
         <section className="measurement-stats__section">
-            <h2 className="measurement-stats__h2">
-                Network distance from centroid to main entrance
-            </h2>
+            <h2 className="measurement-stats__h2">{heading}</h2>
             <p className="measurement-stats__section-note">
-                Walking distance along the network of each{' '}
-                <code>to_nearest_main_entrance</code> measurement anchored on an aggregated
-                centroid (any centroid kind), in {HISTOGRAM_BIN_M} m bins; the last bin
-                collects everything at {HISTOGRAM_OVERFLOW_M} m and more.
+                Walking distance along the network from the aggregated centroid (any
+                centroid kind) to the entrance, one measurement per POI
+                (<code>to_nearest_main_entrance</code> preferred over{' '}
+                <code>to_nearest_entrance</code> when both exist), in{' '}
+                {HISTOGRAM_BIN_M} m bins; the last bin collects everything at{' '}
+                {HISTOGRAM_OVERFLOW_M} m and more.
             </p>
             {total === 0 ? (
                 <p className="measurement-stats__empty">No centroid measurements yet.</p>
             ) : (
                 <div className="measurement-stats__charts">
                     <TufteHistogram
-                        title="Centroid → main entrance"
+                        title={chartTitle}
                         subtitle={`${total} measurement(s)`}
                         bins={denseHistogramBins(rows ?? [])}
                     />
@@ -196,58 +202,158 @@ function CentroidDistanceHistogramSection({
     );
 }
 
-/** Destination types charted, with their display titles. */
-const ENDPOINT_CHART_TYPES: ReadonlyArray<[string, string]> = [
-    ['to_nearest_driving_road', 'Nearest driving road'],
-    ['to_nearest_transit_stop', 'Nearest transit stop'],
+/** Destination types charted, with their display titles. The third
+ *  element adds a "no <destination> / unknown" bar counting POIs with
+ *  no measurement of that type — meaningful for transit stops (a POI
+ *  can genuinely have none nearby), not for driving roads. */
+const ENDPOINT_CHART_TYPES: ReadonlyArray<[string, string, boolean]> = [
+    ['to_nearest_driving_road', 'Nearest driving road', false],
+    ['to_nearest_transit_stop', 'Nearest transit stop', true],
 ];
 
 function EndpointAgreementCharts({
     rows,
     matchRadiusM,
+    heading = 'Do centroid walks end on the same point as main-entrance walks?',
+    chartTitleSuffix = '',
 }: {
     /** May be missing when talking to a backend older than this field. */
     rows: EndpointAgreementStat[] | undefined;
     matchRadiusM: number;
+    /** Section heading override (e.g. the Quebec-only copy). */
+    heading?: string;
+    /** Appended to each chart title (e.g. " (Quebec)"). */
+    chartTitleSuffix?: string;
 }) {
-    const charts = ENDPOINT_CHART_TYPES.map(([type, title]) => ({
-        title,
+    const charts = ENDPOINT_CHART_TYPES.map(([type, title, includeWithout]) => ({
+        title: `${title}${chartTitleSuffix}`,
+        includeWithout,
         stat: rows?.find((r) => r.measurement_type === type),
     }));
     return (
         <section className="measurement-stats__section">
-            <h2 className="measurement-stats__h2">
-                Do centroid walks end on the same point as main-entrance walks?
-            </h2>
+            <h2 className="measurement-stats__h2">{heading}</h2>
             <p className="measurement-stats__section-note">
                 Share of (main entrance, centroid) walk pairs of the same POI whose endpoints
-                land more than <strong>{matchRadiusM} m</strong> apart (any centroid kind).
+                land more than <strong>{matchRadiusM} m</strong> apart (any centroid kind). For
+                transit stops, POIs with no such measurement at all count in the “no stop /
+                unknown” bar.
             </p>
             <div className="measurement-stats__charts">
-                {charts.map(({ title, stat }) =>
-                    stat && stat.n_pairs > 0 ? (
+                {charts.map(({ title, includeWithout, stat }) => {
+                    // POIs with no measurement of this type widen the
+                    // denominator when the chart opts in.
+                    const without = includeWithout ? (stat?.n_pois_without ?? 0) : 0;
+                    const total = (stat?.n_pairs ?? 0) + without;
+                    return stat && total > 0 ? (
                         <TufteBarChart
                             key={title}
                             title={title}
-                            subtitle={`${stat.n_pairs} pair(s)`}
+                            subtitle={`${stat.n_pairs} pair(s)${
+                                without > 0 ? `, ${without} POI(s) without` : ''
+                            }`}
                             bars={[
                                 {
                                     label: 'same point',
-                                    value: (100 * (stat.n_pairs - stat.n_mismatch)) / stat.n_pairs,
+                                    value: (100 * (stat.n_pairs - stat.n_mismatch)) / total,
                                 },
                                 {
                                     label: 'different point',
-                                    value: (100 * stat.n_mismatch) / stat.n_pairs,
+                                    value: (100 * stat.n_mismatch) / total,
                                 },
+                                ...(includeWithout
+                                    ? [
+                                          {
+                                              label: 'no stop / unknown',
+                                              value: (100 * without) / total,
+                                          },
+                                      ]
+                                    : []),
                             ]}
                         />
                     ) : (
                         <p key={title} className="measurement-stats__empty">
                             {title}: no (main, centroid) pair yet.
                         </p>
-                    ),
-                )}
+                    );
+                })}
             </div>
+        </section>
+    );
+}
+
+/** Human labels for the Quebec place-type buckets, in display order. */
+const QUEBEC_PLACE_TYPE_LABELS: ReadonlyArray<[string, string]> = [
+    ['university', 'Universities'],
+    ['cegep', 'CEGEPs / colleges'],
+    ['hospital', 'Hospitals'],
+    ['industrial', 'Industrial'],
+    ['other', 'Other'],
+];
+
+function QuebecPlaceTypeTable({
+    rows,
+}: {
+    /** May be missing when talking to a backend older than this field. */
+    rows: QuebecPlaceTypeStat[] | undefined;
+}) {
+    const byType = new Map((rows ?? []).map((r) => [r.place_type, r]));
+    const displayed = QUEBEC_PLACE_TYPE_LABELS.filter(([type]) => byType.has(type));
+    return (
+        <section className="measurement-stats__section">
+            <h2 className="measurement-stats__h2">Quebec POIs by place type</h2>
+            <p className="measurement-stats__section-note">
+                Quebec picks classified by OSM tags (university, CEGEP/college, hospital,
+                industrial), with the network walking distance from the aggregated centroid
+                to the entrance, one measurement per POI (
+                <code>to_nearest_main_entrance</code> preferred over{' '}
+                <code>to_nearest_entrance</code> when both exist, any centroid kind).
+            </p>
+            {displayed.length === 0 ? (
+                <p className="measurement-stats__empty">No Quebec POIs yet.</p>
+            ) : (
+                <div className="measurement-stats__scroll">
+                    <table className="measurement-stats__table">
+                        <thead>
+                            <tr>
+                                <th>Place type</th>
+                                <th className="measurement-stats__num">POIs</th>
+                                <th className="measurement-stats__num">measurements</th>
+                                <th className="measurement-stats__num">min (m)</th>
+                                <th className="measurement-stats__num">max (m)</th>
+                                <th className="measurement-stats__num">avg (m)</th>
+                                <th className="measurement-stats__num">median (m)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {displayed.map(([type, label]) => {
+                                const row = byType.get(type)!;
+                                return (
+                                    <tr key={type}>
+                                        <td>{label}</td>
+                                        <td className="measurement-stats__num">{row.n_pois}</td>
+                                        <td className="measurement-stats__num">
+                                            {row.n_measurements}
+                                        </td>
+                                        <td className="measurement-stats__num">
+                                            {row.length_m ? round1(row.length_m.min) : '—'}
+                                        </td>
+                                        <td className="measurement-stats__num">
+                                            {row.length_m ? round1(row.length_m.max) : '—'}
+                                        </td>
+                                        <td className="measurement-stats__num">
+                                            {row.length_m ? round1(row.length_m.avg) : '—'}
+                                        </td>
+                                        <td className="measurement-stats__num">
+                                            {row.length_m ? round1(row.length_m.median) : '—'}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </section>
     );
 }
@@ -520,7 +626,8 @@ export function MeasurementStatsPage({
                     metres; duration is <code>(length_m / 1000) / (walking_speed_kmh / 3600)</code>{' '}
                     seconds (same as the focus map walking-time estimate). Each table groups by one
                     pair of stored attributes; cells show min, max, average and median for length and
-                    for duration (seconds plus a minutes:seconds reading).
+                    for duration (seconds plus a minutes:seconds reading). Quebec POIs are analysed
+                    separately: every chart and table excludes them unless marked “(Quebec)”.
                 </p>
             </header>
             {loading && <p className="measurement-stats-page__status">Loading…</p>}
@@ -542,9 +649,21 @@ export function MeasurementStatsPage({
                         rows={stats.main_entrance_vs_centroid_endpoints}
                         matchRadiusM={matchRadiusM}
                     />
+                    <EndpointAgreementCharts
+                        rows={stats.main_entrance_vs_centroid_endpoints_quebec}
+                        matchRadiusM={matchRadiusM}
+                        heading="Do centroid walks end on the same point as main-entrance walks? (Quebec)"
+                        chartTitleSuffix=" (Quebec)"
+                    />
                     <CentroidDistanceHistogramSection
                         rows={stats.centroid_to_main_entrance_histogram}
                     />
+                    <CentroidDistanceHistogramSection
+                        rows={stats.centroid_to_main_entrance_histogram_quebec}
+                        heading="Network distance from centroid to main entrance (Quebec)"
+                        chartTitle="Centroid → main entrance (Quebec)"
+                    />
+                    <QuebecPlaceTypeTable rows={stats.quebec_by_place_type} />
                     <CentroidDeltaTable rows={stats.main_entrance_vs_centroid} />
                     <StatPairTable
                         title="measurement_type × entrance_type"
