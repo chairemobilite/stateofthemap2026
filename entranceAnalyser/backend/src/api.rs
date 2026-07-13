@@ -354,7 +354,28 @@ async fn decision_handler(
                 let poi = match req.bbox.candidate_source {
                     CandidateSource::CustomCentroid => synthetic_centroid_poi(&req.bbox),
                     CandidateSource::CustomOsm => {
-                        custom_osm_anchor_poi(&req.bbox).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?
+                        let mut poi = custom_osm_anchor_poi(&req.bbox)
+                            .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+                        // Fetch the object's tags so the pick can be
+                        // classified (place-type stats, UI labels). Best
+                        // effort: an Overpass hiccup must not block the
+                        // keep, it only leaves the tags empty.
+                        match state
+                            .overpass
+                            .fetch_osm_anchor_center(poi.osm_type, poi.osm_id)
+                            .await
+                        {
+                            Ok((_, tags)) => {
+                                if let Some(group) = state.poi_config.group_for_tags(&tags) {
+                                    poi.group = group.to_string();
+                                }
+                                poi.tags = tags;
+                            }
+                            Err(err) => eprintln!(
+                                "warning: keeping custom OSM pick without tags (overpass: {err})"
+                            ),
+                        }
+                        poi
                     }
                     CandidateSource::Random => unreachable!(),
                 };
