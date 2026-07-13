@@ -461,6 +461,12 @@ and renders min / max / mean / median **path length (m)** and
 - `measurement_type` × `start_origin`
 - `entrance_type` × `start_origin`
 
+In every stats aggregate (pair tables and deltas below), the retired
+combo types `to_nearest_walking_cycling_driving_network` and
+`to_nearest_walking_driving_network` are counted as
+`to_nearest_driving_road` — stats-only folding, the stored rows keep
+their original type.
+
 Duration uses the same formula as the focus map:
 `length_m × 3600 / (1000 × walking_speed_kmh)`. Useful for paper
 tables comparing centroid-anchored vs entrance-anchored walks; it does
