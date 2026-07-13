@@ -526,11 +526,22 @@ export interface MeasurementPairAggregate {
     duration_s: MeasurementFourNumberStats;
 }
 
+/** Signed (centroid − main entrance) delta stats for one measurement type.
+ *  `n` counts (main, centroid_*) measurement pairs of the same POI.
+ *  Mirrors `MeasurementDeltaAggregate`. */
+export interface MeasurementDeltaAggregate {
+    measurement_type: string;
+    n: number;
+    delta_length_m: MeasurementFourNumberStats;
+    delta_duration_s: MeasurementFourNumberStats;
+}
+
 /** Wire shape for `GET /api/analyses/poi_focus_measurement_stats`. */
 export interface PoiFocusMeasurementStats {
     by_measurement_type_and_entrance_type: MeasurementPairAggregate[];
     by_measurement_type_and_start_origin: MeasurementPairAggregate[];
     by_entrance_type_and_start_origin: MeasurementPairAggregate[];
+    main_entrance_vs_centroid: MeasurementDeltaAggregate[];
 }
 
 /** `GET /api/analyses/poi_focus_measurement_stats` — global aggregates by attribute pairs. */

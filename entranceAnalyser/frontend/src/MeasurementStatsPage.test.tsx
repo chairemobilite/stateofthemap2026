@@ -28,6 +28,7 @@ const EMPTY_STATS = {
     by_measurement_type_and_entrance_type: [],
     by_measurement_type_and_start_origin: [],
     by_entrance_type_and_start_origin: [],
+    main_entrance_vs_centroid: [],
 };
 
 const EMPTY_COUNTRY_STATS = { by_country: [], total: 0, unresolved: 0 };
@@ -123,6 +124,42 @@ describe('<MeasurementStatsPage />', () => {
         expect(row!.lastElementChild).toHaveTextContent(quebecCell);
         expect(screen.getByText(/5 POI\(s\) total/)).toBeInTheDocument();
         expect(screen.getByText(/1 outside every loaded country boundary/)).toBeInTheDocument();
+    });
+
+    it('renders centroid-vs-main deltas per measurement type', async () => {
+        const four = (v: number) => ({ min: v, max: v, avg: v, median: v });
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
+            ...EMPTY_STATS,
+            main_entrance_vs_centroid: [
+                {
+                    measurement_type: 'to_nearest_transit_stop',
+                    n: 4,
+                    delta_length_m: four(12.5),
+                    delta_duration_s: four(9),
+                },
+            ],
+        });
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        await waitFor(() => {
+            expect(
+                screen.getByText('centroid vs main entrance (Δ = centroid − main)'),
+            ).toBeInTheDocument();
+        });
+
+        const row = screen.getByText('to_nearest_transit_stop').closest('tr');
+        expect(row).not.toBeNull();
+        expect(row!).toHaveTextContent('4');
+        expect(row!).toHaveTextContent('12.5');
+        expect(row!).toHaveTextContent('9.0');
     });
 
     it('shows empty state when there are no destination mismatches', async () => {

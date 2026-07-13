@@ -15,6 +15,7 @@ import {
     fetchPoiFocusMeasurementDestinationWarnings,
     fetchPoiFocusMeasurementStats,
     fetchPoiPickCountryStats,
+    type MeasurementDeltaAggregate,
     type MeasurementPairAggregate,
     type PoiFocusMeasurementStats,
     type PoiPickCountryStats,
@@ -124,6 +125,79 @@ function StatPairTable({
                                 <td className="measurement-stats__num">
                                     {formatMinutesSeconds(r.duration_s.median)}
                                 </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    );
+}
+
+function CentroidDeltaTable({ rows }: { rows: MeasurementDeltaAggregate[] }) {
+    const title = 'centroid vs main entrance (Δ = centroid − main)';
+    if (rows.length === 0) {
+        return (
+            <section className="measurement-stats__section">
+                <h2 className="measurement-stats__h2">{title}</h2>
+                <p className="measurement-stats__empty">
+                    No POI has both a main-entrance and a centroid measurement of the same type
+                    yet.
+                </p>
+            </section>
+        );
+    }
+    return (
+        <section className="measurement-stats__section">
+            <h2 className="measurement-stats__h2">{title}</h2>
+            <p className="measurement-stats__section-note">
+                For each POI and measurement type, every walk anchored on a centroid
+                (<code>centroid_main_building</code>, <code>centroid_area</code>, …) is paired
+                with the walk from the <code>main</code> entrance; positive deltas mean the
+                centroid walk is longer. <code>to_nearest_entrance</code> and{' '}
+                <code>to_nearest_main_entrance</code> are excluded.
+            </p>
+            <div className="measurement-stats__scroll">
+                <table className="measurement-stats__table">
+                    <thead>
+                        <tr>
+                            <th>measurement_type</th>
+                            <th className="measurement-stats__num">n</th>
+                            <th colSpan={4} className="measurement-stats__group">
+                                Δ Length (m)
+                            </th>
+                            <th colSpan={4} className="measurement-stats__group">
+                                Δ Duration (s)
+                            </th>
+                        </tr>
+                        <tr>
+                            <th />
+                            <th />
+                            <th className="measurement-stats__num">min</th>
+                            <th className="measurement-stats__num">max</th>
+                            <th className="measurement-stats__num">avg</th>
+                            <th className="measurement-stats__num">med</th>
+                            <th className="measurement-stats__num">min</th>
+                            <th className="measurement-stats__num">max</th>
+                            <th className="measurement-stats__num">avg</th>
+                            <th className="measurement-stats__num">med</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((r) => (
+                            <tr key={r.measurement_type}>
+                                <td>
+                                    <code>{r.measurement_type}</code>
+                                </td>
+                                <td className="measurement-stats__num">{r.n}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_length_m.min)}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_length_m.max)}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_length_m.avg)}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_length_m.median)}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_duration_s.min)}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_duration_s.max)}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_duration_s.avg)}</td>
+                                <td className="measurement-stats__num">{round1(r.delta_duration_s.median)}</td>
                             </tr>
                         ))}
                     </tbody>
@@ -330,6 +404,7 @@ export function MeasurementStatsPage({
                         onOpenPoiFocus={onOpenPoiFocus}
                         poiLabelForBbox={poiLabelForBbox}
                     />
+                    <CentroidDeltaTable rows={stats.main_entrance_vs_centroid} />
                     <StatPairTable
                         title="measurement_type × entrance_type"
                         attrALabel="measurement_type"
