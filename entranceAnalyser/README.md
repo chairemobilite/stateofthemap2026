@@ -492,14 +492,30 @@ mean the centroid-anchored walk is longer. `to_nearest_entrance` and
 `to_nearest_main_entrance` are excluded (they measure toward the
 entrance itself).
 
-### POIs per country (with Quebec subset)
+Finally, `centroid_to_main_entrance_histogram` feeds a Tufte-style
+**histogram of the network walking distance from each aggregated
+centroid to the main entrance** (`to_nearest_main_entrance`
+measurements anchored on any `centroid_*` kind): 25 m bins
+(`bin_start_m`, `n`; empty bins omitted), with everything at 250 m and
+more collected in an open-ended last bin rendered as "250+".
+
+### POIs per country (Quebec reported separately)
 
 The **Stats** tab also calls `GET /api/analyses/poi_pick_country_stats`
-and renders how many picked POIs fall in each country, plus how many of
-the Canadian ones are inside **Quebec** — those will be treated
-separately in future statistics. Resolution is a PostGIS
-point-in-polygon (`ST_Contains`) of each `poi.center` against the
-`admin_boundaries` table.
+and renders how many picked POIs fall in each country. POIs inside
+**Quebec** are excluded from the country table and totals, and reported
+in their own section — they will be treated separately in future
+statistics. Each `poi.center` is assigned the
+*nearest* country polygon in `admin_boundaries` (PostGIS `<->`; a
+containing polygon has distance 0, so this is point-in-polygon with a
+fallback for coastal points just outside the 1:10m coastline).
+
+Each country row also reports `n_rejected`: bboxes the reviewer
+rejected. Rejecting deletes the kept bbox (cascade), so the rejection
+is preserved as a tombstone in `rejected_poi_picks` (bbox centre, POI
+if one was picked, reason) written by `remove_kept` in the same
+transaction as the delete. Tombstones count only in `n_rejected`,
+never in `n` or `total`.
 
 ```bash
 curl -s http://127.0.0.1:3000/api/analyses/poi_pick_country_stats | jq
@@ -508,16 +524,20 @@ curl -s http://127.0.0.1:3000/api/analyses/poi_pick_country_stats | jq
 ```json
 {
   "by_country": [
-    { "iso_code": "CA", "name": "Canada", "n": 12, "n_in_quebec": 8 }
+    { "iso_code": "CA", "name": "Canada", "n": 4, "n_rejected": 1 }
   ],
   "total": 30,
-  "unresolved": 2
+  "total_rejected": 3,
+  "total_with_rejected": 33,
+  "quebec": { "n": 2, "n_rejected": 0 },
+  "unresolved": 0
 }
 ```
 
-`unresolved` counts POIs matching no loaded country polygon; it equals
-`total` until you load the boundaries (one-time, re-runnable — same
-offline provisioning pattern as `entrance-analyser-build-grid`):
+`unresolved` equals `total` until you load the boundaries (one-time,
+re-runnable — same offline provisioning pattern as
+`entrance-analyser-build-grid`), and is 0 afterwards thanks to the
+nearest-country fallback:
 
 ```bash
 cargo run --bin entrance-analyser-load-boundaries

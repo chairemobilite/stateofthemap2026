@@ -32,7 +32,14 @@ const EMPTY_STATS = {
     main_entrance_vs_centroid_endpoints: [],
 };
 
-const EMPTY_COUNTRY_STATS = { by_country: [], total: 0, unresolved: 0 };
+const EMPTY_COUNTRY_STATS = {
+    by_country: [],
+    total: 0,
+    total_rejected: 0,
+    total_with_rejected: 0,
+    quebec: { n: 0, n_rejected: 0 },
+    unresolved: 0,
+};
 
 const TRANSIT_MSG =
     'The nearest transit stop is not the same for main building centroid and main entrance';
@@ -95,16 +102,19 @@ describe('<MeasurementStatsPage />', () => {
     });
 
     it.each([
-        ['CA row shows the Quebec subset', 'Canada', '2', '1'],
-        ['non-CA row shows a dash instead of a Quebec count', 'France', '—', '0'],
-    ])('POIs per country table: %s', async (_label, countryName, quebecCell, rejectedCell) => {
+        ['CA row', 'Canada', '3', '1'],
+        ['FR row', 'France', '1', '0'],
+    ])('POIs per country table: %s', async (_label, countryName, nCell, rejectedCell) => {
         vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
         vi.mocked(fetchPoiPickCountryStats).mockResolvedValue({
             by_country: [
-                { iso_code: 'CA', name: 'Canada', n: 3, n_in_quebec: 2, n_rejected: 1 },
-                { iso_code: 'FR', name: 'France', n: 1, n_in_quebec: 0, n_rejected: 0 },
+                { iso_code: 'CA', name: 'Canada', n: 3, n_rejected: 1 },
+                { iso_code: 'FR', name: 'France', n: 1, n_rejected: 0 },
             ],
             total: 5,
+            total_rejected: 1,
+            total_with_rejected: 6,
+            quebec: { n: 2, n_rejected: 1 },
             unresolved: 1,
         });
         vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
@@ -122,11 +132,18 @@ describe('<MeasurementStatsPage />', () => {
 
         const row = screen.getByText(countryName).closest('tr');
         expect(row).not.toBeNull();
-        // Cells: country | POIs | in Quebec | rejected.
-        expect(row!.children[2]).toHaveTextContent(quebecCell);
-        expect(row!.children[3]).toHaveTextContent(rejectedCell);
-        expect(screen.getByText(/5 POI\(s\) total/)).toBeInTheDocument();
-        expect(screen.getByText(/1 outside every loaded country boundary/)).toBeInTheDocument();
+        // Cells: country | POIs | rejected.
+        expect(row!.children[1]).toHaveTextContent(nCell);
+        expect(row!.children[2]).toHaveTextContent(rejectedCell);
+        // Totals under the title, then the dedicated Quebec section.
+        expect(
+            screen.getByText(/5 POI\(s\), 1 rejected — 6 total including rejected/),
+        ).toBeInTheDocument();
+        expect(screen.getByText(/1 POI\(s\) outside every loaded country boundary/)).toBeInTheDocument();
+        expect(screen.getByText('POIs in Quebec')).toBeInTheDocument();
+        expect(
+            screen.getByText(/2 POI\(s\), 1 rejected — 3 total including rejected/),
+        ).toBeInTheDocument();
     });
 
     it.each([
@@ -198,6 +215,60 @@ describe('<MeasurementStatsPage />', () => {
         expect(row!).toHaveTextContent('4');
         expect(row!).toHaveTextContent('12.5');
         expect(row!).toHaveTextContent('9.0');
+    });
+
+    it('renders the centroid → main entrance distance histogram with dense bins', async () => {
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
+            ...EMPTY_STATS,
+            // Sparse backend bins: 0–25 (70), 100–125 (8), 250+ (3).
+            centroid_to_main_entrance_histogram: [
+                { bin_start_m: 0, n: 70 },
+                { bin_start_m: 100, n: 8 },
+                { bin_start_m: 250, n: 3 },
+            ],
+        });
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole('img', { name: 'Centroid → main entrance' }),
+            ).toBeInTheDocument();
+        });
+
+        const chart = screen.getByRole('img', { name: 'Centroid → main entrance' });
+        // All 11 bin labels present, including zero-count in-between bins.
+        for (const label of ['0–25', '25–50', '100–125', '225–250', '250+']) {
+            expect(chart).toHaveTextContent(label);
+        }
+        expect(chart).toHaveTextContent('70');
+        expect(chart).toHaveTextContent('8');
+        expect(chart).toHaveTextContent('3');
+        expect(screen.getByText('81 measurement(s)')).toBeInTheDocument();
+    });
+
+    it('shows the histogram empty state when there are no centroid measurements', async () => {
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        await waitFor(() => {
+            expect(screen.getByText('No centroid measurements yet.')).toBeInTheDocument();
+        });
     });
 
     it('shows empty state when there are no destination mismatches', async () => {

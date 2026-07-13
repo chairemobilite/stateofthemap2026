@@ -17,6 +17,7 @@ import {
     fetchPoiPickCountryStats,
     type EndpointAgreementStat,
     type MeasurementDeltaAggregate,
+    type MeasurementHistogramBin,
     type MeasurementPairAggregate,
     type PoiFocusMeasurementStats,
     type PoiPickCountryStats,
@@ -28,6 +29,7 @@ import {
 } from './keptBboxes/measurementDestinationWarnings';
 import { formatMinutesSeconds } from './measurementStatsFormat';
 import { TufteBarChart } from './TufteBarChart';
+import { TufteHistogram, type TufteHistogramBin } from './TufteHistogram';
 
 export interface MeasurementStatsPageProps {
     /** Open the focus map for one kept bbox (wired from `App`). */
@@ -132,6 +134,64 @@ function StatPairTable({
                     </tbody>
                 </table>
             </div>
+        </section>
+    );
+}
+
+/** Bin width of the centroid → main entrance histogram (backend contract). */
+const HISTOGRAM_BIN_M = 25;
+/** Lower bound of the open-ended last bin ("250+"). */
+const HISTOGRAM_OVERFLOW_M = 250;
+
+/**
+ * Fill the sparse backend histogram (empty bins omitted) into a dense,
+ * contiguous 0…250+ bin list for display.
+ */
+function denseHistogramBins(rows: MeasurementHistogramBin[]): TufteHistogramBin[] {
+    const byStart = new Map(rows.map((r) => [r.bin_start_m, r.n]));
+    const bins: TufteHistogramBin[] = [];
+    for (let start = 0; start < HISTOGRAM_OVERFLOW_M; start += HISTOGRAM_BIN_M) {
+        bins.push({
+            label: `${start}–${start + HISTOGRAM_BIN_M}`,
+            count: byStart.get(start) ?? 0,
+        });
+    }
+    bins.push({
+        label: `${HISTOGRAM_OVERFLOW_M}+`,
+        count: byStart.get(HISTOGRAM_OVERFLOW_M) ?? 0,
+    });
+    return bins;
+}
+
+function CentroidDistanceHistogramSection({
+    rows,
+}: {
+    /** May be missing when talking to a backend older than this field. */
+    rows: MeasurementHistogramBin[] | undefined;
+}) {
+    const total = rows?.reduce((sum, r) => sum + r.n, 0) ?? 0;
+    return (
+        <section className="measurement-stats__section">
+            <h2 className="measurement-stats__h2">
+                Network distance from centroid to main entrance
+            </h2>
+            <p className="measurement-stats__section-note">
+                Walking distance along the network of each{' '}
+                <code>to_nearest_main_entrance</code> measurement anchored on an aggregated
+                centroid (any centroid kind), in {HISTOGRAM_BIN_M} m bins; the last bin
+                collects everything at {HISTOGRAM_OVERFLOW_M} m and more.
+            </p>
+            {total === 0 ? (
+                <p className="measurement-stats__empty">No centroid measurements yet.</p>
+            ) : (
+                <div className="measurement-stats__charts">
+                    <TufteHistogram
+                        title="Centroid → main entrance"
+                        subtitle={`${total} measurement(s)`}
+                        bins={denseHistogramBins(rows ?? [])}
+                    />
+                </div>
+            )}
         </section>
     );
 }
@@ -267,54 +327,66 @@ function CentroidDeltaTable({ rows }: { rows: MeasurementDeltaAggregate[] }) {
 
 function PoiCountryStatsSection({ stats }: { stats: PoiPickCountryStats }) {
     return (
-        <section className="measurement-stats__section">
-            <h2 className="measurement-stats__h2">POIs per country</h2>
-            <p className="measurement-stats__section-note">
-                Country of each picked POI (point-in-polygon on the loaded boundaries). POIs in{' '}
-                <strong>Quebec</strong> are flagged separately, as they will be treated apart in
-                future statistics.
-            </p>
-            {stats.total === 0 ? (
-                <p className="measurement-stats__empty">No picked POIs yet.</p>
-            ) : (
-                <>
-                    <div className="measurement-stats__scroll">
-                        <table className="measurement-stats__table">
-                            <thead>
-                                <tr>
-                                    <th>Country</th>
-                                    <th className="measurement-stats__num">POIs</th>
-                                    <th className="measurement-stats__num">in Quebec</th>
-                                    <th className="measurement-stats__num">rejected</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {stats.by_country.map((row) => (
-                                    <tr key={row.iso_code}>
-                                        <td>
-                                            {row.name} <code>{row.iso_code}</code>
-                                        </td>
-                                        <td className="measurement-stats__num">{row.n}</td>
-                                        <td className="measurement-stats__num">
-                                            {row.iso_code === 'CA' ? row.n_in_quebec : '—'}
-                                        </td>
-                                        <td className="measurement-stats__num">
-                                            {row.n_rejected}
-                                        </td>
+        <>
+            <section className="measurement-stats__section">
+                <h2 className="measurement-stats__h2">POIs per country</h2>
+                <p className="measurement-stats__section-note">
+                    {stats.total} POI(s), {stats.total_rejected} rejected —{' '}
+                    {stats.total_with_rejected} total including rejected. Quebec POIs are
+                    excluded here and reported in their own section below.
+                </p>
+                {stats.total_with_rejected === 0 ? (
+                    <p className="measurement-stats__empty">No picked POIs yet.</p>
+                ) : (
+                    <>
+                        <div className="measurement-stats__scroll">
+                            <table className="measurement-stats__table">
+                                <thead>
+                                    <tr>
+                                        <th>Country</th>
+                                        <th className="measurement-stats__num">POIs</th>
+                                        <th className="measurement-stats__num">rejected</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody>
+                                    {stats.by_country.map((row) => (
+                                        <tr key={row.iso_code}>
+                                            <td>
+                                                {row.name} <code>{row.iso_code}</code>
+                                            </td>
+                                            <td className="measurement-stats__num">{row.n}</td>
+                                            <td className="measurement-stats__num">
+                                                {row.n_rejected}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        {stats.unresolved > 0 && (
+                            <p className="measurement-stats__section-note">
+                                {stats.unresolved} POI(s) outside every loaded country boundary
+                                (run entrance-analyser-load-boundaries).
+                            </p>
+                        )}
+                    </>
+                )}
+            </section>
+            <section className="measurement-stats__section">
+                <h2 className="measurement-stats__h2">POIs in Quebec</h2>
+                <p className="measurement-stats__section-note">
+                    Analysed separately from the worldwide sample above.
+                </p>
+                {stats.quebec.n + stats.quebec.n_rejected === 0 ? (
+                    <p className="measurement-stats__empty">No Quebec POIs yet.</p>
+                ) : (
                     <p className="measurement-stats__section-note">
-                        {stats.total} POI(s) total
-                        {stats.unresolved > 0 &&
-                            ` — ${stats.unresolved} outside every loaded country boundary (run entrance-analyser-load-boundaries)`}
-                        .
+                        {stats.quebec.n} POI(s), {stats.quebec.n_rejected} rejected —{' '}
+                        {stats.quebec.n + stats.quebec.n_rejected} total including rejected.
                     </p>
-                </>
-            )}
-        </section>
+                )}
+            </section>
+        </>
     );
 }
 
@@ -469,6 +541,9 @@ export function MeasurementStatsPage({
                     <EndpointAgreementCharts
                         rows={stats.main_entrance_vs_centroid_endpoints}
                         matchRadiusM={matchRadiusM}
+                    />
+                    <CentroidDistanceHistogramSection
+                        rows={stats.centroid_to_main_entrance_histogram}
                     />
                     <CentroidDeltaTable rows={stats.main_entrance_vs_centroid} />
                     <StatPairTable

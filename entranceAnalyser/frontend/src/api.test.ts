@@ -336,8 +336,11 @@ describe('api client', () => {
 
     it('fetchPoiPickCountryStats GETs POI counts per country', async () => {
         const body = {
-            by_country: [{ iso_code: 'CA', name: 'Canada', n: 3, n_in_quebec: 2, n_rejected: 1 }],
+            by_country: [{ iso_code: 'CA', name: 'Canada', n: 3, n_rejected: 1 }],
             total: 4,
+            total_rejected: 1,
+            total_with_rejected: 5,
+            quebec: { n: 2, n_rejected: 0 },
             unresolved: 1,
         };
         const fetchFn = jsonFetch(body);

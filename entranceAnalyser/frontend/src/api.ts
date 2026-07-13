@@ -551,6 +551,9 @@ export interface PoiFocusMeasurementStats {
     by_entrance_type_and_start_origin: MeasurementPairAggregate[];
     main_entrance_vs_centroid: MeasurementDeltaAggregate[];
     main_entrance_vs_centroid_endpoints: EndpointAgreementStat[];
+    /** 25 m histogram of centroid → main entrance network walking
+     *  distances; empty bins omitted. May be missing on older backends. */
+    centroid_to_main_entrance_histogram?: MeasurementHistogramBin[];
 }
 
 /** `GET /api/analyses/poi_focus_measurement_stats` — global aggregates by attribute pairs. */
@@ -562,24 +565,44 @@ export async function fetchPoiFocusMeasurementStats(
     );
 }
 
-/** POI counts for one country. `n_in_quebec` is the subset of `n` inside
- *  Quebec (relevant for `iso_code === 'CA'`); Quebec POIs will be treated
- *  separately in future statistics. Mirrors `PoiPickCountryCount`. */
+/** One histogram bin of network walking distance. `bin_start_m` is the
+ *  inclusive lower bound; bins are 25 m wide except the last one
+ *  (`bin_start_m === 250`), which is open-ended ("250 m and more").
+ *  Mirrors `MeasurementHistogramBin`. */
+export interface MeasurementHistogramBin {
+    bin_start_m: number;
+    n: number;
+}
+
+/** POI counts for one country. Quebec POIs are excluded (see
+ *  `QuebecPoiStats`); they will be treated separately in future
+ *  statistics. Mirrors `PoiPickCountryCount`. */
 export interface PoiPickCountryCount {
     iso_code: string;
     name: string;
     n: number;
-    n_in_quebec: number;
-    /** Subset of `n` whose pick was rejected by the reviewer. */
+    /** Rejected bboxes tombstoned in this country (not part of `n`). */
     n_rejected: number;
 }
 
-/** Wire shape for `GET /api/analyses/poi_pick_country_stats`. */
+/** Quebec-only POI counts, reported apart from the per-country table. */
+export interface QuebecPoiStats {
+    n: number;
+    n_rejected: number;
+}
+
+/** Wire shape for `GET /api/analyses/poi_pick_country_stats`. All
+ *  `total*` fields exclude Quebec POIs, which are reported in `quebec`. */
 export interface PoiPickCountryStats {
-    /** Sorted by `n` descending, then country name. */
+    /** Sorted by `n` descending, then country name. Quebec excluded. */
     by_country: PoiPickCountryCount[];
-    /** Every picked POI, including unresolved ones. */
+    /** Active (non-rejected) picked POIs. */
     total: number;
+    /** Rejected bbox tombstones. */
+    total_rejected: number;
+    /** `total + total_rejected`. */
+    total_with_rejected: number;
+    quebec: QuebecPoiStats;
     /** POIs matching no loaded country polygon. */
     unresolved: number;
 }

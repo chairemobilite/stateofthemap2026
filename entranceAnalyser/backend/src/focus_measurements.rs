@@ -305,6 +305,23 @@ pub struct MeasurementDeltaAggregate {
     pub delta_duration_s: MeasurementFourNumberStats,
 }
 
+/// One histogram bin of network walking distance. `bin_start_m` is the
+/// inclusive lower bound; every bin is
+/// [`CENTROID_HISTOGRAM_BIN_M`] wide except the last one
+/// (`bin_start_m == CENTROID_HISTOGRAM_OVERFLOW_M`), which is
+/// open-ended ("250 m and more").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementHistogramBin {
+    pub bin_start_m: i64,
+    pub n: i64,
+}
+
+/// Width of the centroid→main-entrance histogram bins, in metres.
+pub const CENTROID_HISTOGRAM_BIN_M: i64 = 25;
+
+/// Lower bound of the open-ended last histogram bin, in metres.
+pub const CENTROID_HISTOGRAM_OVERFLOW_M: i64 = 250;
+
 /// All pairwise breakdowns exposed on `GET …/poi_focus_measurement_stats`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PoiFocusMeasurementStats {
@@ -320,6 +337,12 @@ pub struct PoiFocusMeasurementStats {
     #[serde(default)]
     pub main_entrance_vs_centroid_endpoints:
         Vec<crate::measurement_destination_warnings::EndpointAgreementStat>,
+    /// Histogram of the network walking distance from each aggregated
+    /// centroid to the main entrance (`to_nearest_main_entrance`
+    /// measurements anchored on a `centroid_*` entrance kind), in
+    /// [`CENTROID_HISTOGRAM_BIN_M`]-metre bins; empty bins are omitted.
+    #[serde(default)]
+    pub centroid_to_main_entrance_histogram: Vec<MeasurementHistogramBin>,
 }
 
 /// One persisted polyline from the focus-map measurement tool.

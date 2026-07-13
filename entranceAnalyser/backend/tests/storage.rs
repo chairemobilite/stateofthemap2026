@@ -395,6 +395,11 @@ async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
             MeasurementPurpose::ToNearestWalkingCyclingDrivingNetwork,
             EntranceKind::CentroidMainBuilding,
         ),
+        // Centroid → main-entrance walks feed the 25 m histogram:
+        // ~11 m (bin 0), ~111 m (bin 100), ~334 m (overflow bin 250).
+        (0.0001, MeasurementPurpose::ToNearestMainEntrance, EntranceKind::CentroidMainBuilding),
+        (0.001, MeasurementPurpose::ToNearestMainEntrance, EntranceKind::CentroidArea),
+        (0.003, MeasurementPurpose::ToNearestMainEntrance, EntranceKind::CentroidParcel),
     ];
     for (dx, purpose, entrance) in rows {
         store
@@ -450,6 +455,15 @@ async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
     assert!((row.delta_length_m.median - (d_small + d_big) / 2.0).abs() < 1.0);
     // Same walking speed everywhere: duration delta = length delta × 3600 / 5000.
     assert!((row.delta_duration_s.max - d_big * 3600.0 / 5000.0).abs() < 1.0);
+
+    // Centroid → main-entrance histogram: ~11 m, ~111 m, ~334 m walks
+    // land in bins 0, 100 and the open-ended 250 bucket.
+    let histogram: Vec<(i64, i64)> = stats
+        .centroid_to_main_entrance_histogram
+        .iter()
+        .map(|b| (b.bin_start_m, b.n))
+        .collect();
+    assert_eq!(histogram, [(0, 1), (100, 1), (250, 1)]);
 
     db.cleanup().await.ok();
 }
@@ -577,7 +591,8 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
         group: "shop".into(),
     };
     // (POI center, rejected): Alphaland; Canada in Quebec (rejected);
-    // Canada outside Quebec; middle of the Pacific (unresolved).
+    // Canada outside Quebec; middle of the Pacific (nearest-country
+    // fallback assigns it to Canada, the closest polygon).
     for (center, rejected) in [
         ([5.0, 5.0], false),
         ([-73.55, 45.55], true),
@@ -589,6 +604,8 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
         store.append(bbox).await.unwrap();
         store.write_poi_pick(id, Some(&poi_at(center))).await.unwrap();
         if rejected {
+            // Real reject workflow: flag the pick, then delete the bbox,
+            // which tombstones it into `rejected_poi_picks`.
             store
                 .set_poi_pick_rejection(
                     id,
@@ -596,6 +613,7 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
                 )
                 .await
                 .unwrap();
+            assert!(store.remove_kept(id).await.unwrap());
         }
     }
     // A cached "no POI in this cell" row must not count.
@@ -605,17 +623,22 @@ async fn poi_pick_country_stats_counts_by_country_with_quebec_subset() {
     store.write_poi_pick(empty_id, None).await.unwrap();
 
     let stats = store.aggregate_poi_pick_country_stats().await.unwrap();
-    assert_eq!(stats.total, 4);
-    assert_eq!(stats.unresolved, 1);
+    // Rejected picks are tombstoned and no longer count in n/total, and
+    // Quebec POIs live in their own bucket: the rejected Montreal bbox
+    // shows up in `quebec.n_rejected`, not in Canada's row.
+    assert_eq!(stats.total, 3);
+    assert_eq!(stats.total_rejected, 0);
+    assert_eq!(stats.total_with_rejected, 3);
+    assert_eq!(stats.quebec.n, 0);
+    assert_eq!(stats.quebec.n_rejected, 1);
+    assert_eq!(stats.unresolved, 0);
     // Sorted by n descending, then name.
     assert_eq!(stats.by_country.len(), 2);
     assert_eq!(stats.by_country[0].iso_code, "CA");
     assert_eq!(stats.by_country[0].n, 2);
-    assert_eq!(stats.by_country[0].n_in_quebec, 1);
-    assert_eq!(stats.by_country[0].n_rejected, 1);
+    assert_eq!(stats.by_country[0].n_rejected, 0);
     assert_eq!(stats.by_country[1].iso_code, "AA");
     assert_eq!(stats.by_country[1].n, 1);
-    assert_eq!(stats.by_country[1].n_in_quebec, 0);
     assert_eq!(stats.by_country[1].n_rejected, 0);
 
     db.cleanup().await.ok();
