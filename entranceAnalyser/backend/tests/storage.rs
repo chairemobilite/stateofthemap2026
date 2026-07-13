@@ -345,7 +345,7 @@ async fn poi_focus_measurement_stats_groups_pairs_with_median_length_and_duratio
         .unwrap();
 
     let stats: PoiFocusMeasurementStats = store
-        .aggregate_poi_focus_measurement_pair_stats()
+        .aggregate_poi_focus_measurement_pair_stats(10.0)
         .await
         .unwrap();
     let row = stats
@@ -412,7 +412,7 @@ async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
             .unwrap();
     }
 
-    let stats = store.aggregate_poi_focus_measurement_pair_stats().await.unwrap();
+    let stats = store.aggregate_poi_focus_measurement_pair_stats(10.0).await.unwrap();
     let types: Vec<&str> = stats
         .main_entrance_vs_centroid
         .iter()
@@ -431,6 +431,15 @@ async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
         .by_measurement_type_and_entrance_type
         .iter()
         .all(|r| !r.attr_a.contains("walking_driving") && !r.attr_a.contains("cycling_driving")));
+    // Endpoint agreement: every centroid endpoint here is > 10 m from the
+    // main endpoint of the same (folded) type, so all pairs mismatch.
+    let endpoints = &stats.main_entrance_vs_centroid_endpoints;
+    let by_type = |t: &str| endpoints.iter().find(|r| r.measurement_type == t).unwrap();
+    assert_eq!(by_type("to_nearest_driving_road").n_pairs, 1);
+    assert_eq!(by_type("to_nearest_driving_road").n_mismatch, 1);
+    assert_eq!(by_type("to_nearest_transit_stop").n_pairs, 2);
+    assert_eq!(by_type("to_nearest_transit_stop").n_mismatch, 2);
+
     let row = &stats.main_entrance_vs_centroid[1];
     assert_eq!(row.measurement_type, "to_nearest_transit_stop");
     assert_eq!(row.n, 2);

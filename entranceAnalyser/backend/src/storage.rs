@@ -40,7 +40,8 @@ use crate::focus_measurements::{
     PoiFocusMeasurementStats,
 };
 use crate::measurement_destination_warnings::{
-    destination_warnings_by_bbox, PoiFocusMeasurementDestinationWarningsResponse,
+    destination_warnings_by_bbox, main_vs_centroid_endpoint_agreement,
+    PoiFocusMeasurementDestinationWarningsResponse,
 };
 use crate::overpass::Poi;
 use crate::poi_focus::PoiFocusResult;
@@ -499,8 +500,12 @@ impl PgStore {
     /// pair of values among `measurement_type`, `entrance_type`, and
     /// `start_origin` (three groupings). Duration matches the frontend:
     /// `(length_m / 1000) / (walking_speed_kmh / 3600)`.
+    /// `match_radius_m` is the endpoint tolerance used for the
+    /// main-vs-centroid endpoint agreement counts (same knob as the
+    /// destination warnings).
     pub async fn aggregate_poi_focus_measurement_pair_stats(
         &self,
+        match_radius_m: f64,
     ) -> Result<PoiFocusMeasurementStats, sqlx::Error> {
         let by_measurement_type_and_entrance_type = Self::measurement_pair_bucket(
             &self.pool,
@@ -521,11 +526,15 @@ impl PgStore {
         )
         .await?;
         let main_entrance_vs_centroid = Self::main_entrance_vs_centroid_deltas(&self.pool).await?;
+        let all = self.list_all_poi_focus_measurements().await?;
+        let main_entrance_vs_centroid_endpoints =
+            main_vs_centroid_endpoint_agreement(&all, match_radius_m);
         Ok(PoiFocusMeasurementStats {
             by_measurement_type_and_entrance_type,
             by_measurement_type_and_start_origin,
             by_entrance_type_and_start_origin,
             main_entrance_vs_centroid,
+            main_entrance_vs_centroid_endpoints,
         })
     }
 
