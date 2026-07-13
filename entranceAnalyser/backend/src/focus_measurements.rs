@@ -292,12 +292,29 @@ pub struct MeasurementPairAggregate {
     pub duration_s: MeasurementFourNumberStats,
 }
 
+/// Per-`measurement_type` statistics on the signed difference
+/// (centroid − main entrance) between measurements of the same POI:
+/// how much longer (or shorter) the walk is when anchored on any
+/// `centroid_*` entrance kind instead of the main entrance. `n` counts
+/// (main, centroid) measurement pairs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementDeltaAggregate {
+    pub measurement_type: String,
+    pub n: i64,
+    pub delta_length_m: MeasurementFourNumberStats,
+    pub delta_duration_s: MeasurementFourNumberStats,
+}
+
 /// All pairwise breakdowns exposed on `GET …/poi_focus_measurement_stats`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PoiFocusMeasurementStats {
     pub by_measurement_type_and_entrance_type: Vec<MeasurementPairAggregate>,
     pub by_measurement_type_and_start_origin: Vec<MeasurementPairAggregate>,
     pub by_entrance_type_and_start_origin: Vec<MeasurementPairAggregate>,
+    /// Centroid-vs-main-entrance deltas; `default` keeps older cached
+    /// JSON deserialisable.
+    #[serde(default)]
+    pub main_entrance_vs_centroid: Vec<MeasurementDeltaAggregate>,
 }
 
 /// One persisted polyline from the focus-map measurement tool.

@@ -366,6 +366,65 @@ async fn poi_focus_measurement_stats_groups_pairs_with_median_length_and_duratio
 }
 
 #[tokio::test]
+async fn measurement_stats_pair_main_entrance_with_any_centroid_kind() {
+    let Some(db) = common::pg_or_skip().await else {
+        return;
+    };
+    let store = PgStore::new(db.pool.clone());
+    let bbox = sample_bbox([0.0, 0.0]);
+    let id = bbox.id;
+    store.append(bbox).await.unwrap();
+
+    let seg = |dx: f64| vec![[0.0_f64, 0.0_f64], [dx, 0.0_f64]];
+    let len = |dx: f64| path_length_m_haversine(&seg(dx)).unwrap();
+
+    // Same POI, same measurement type: one main-entrance walk plus two
+    // different centroid kinds → two (main, centroid) pairs. The
+    // entrance-targeting type below must be excluded from the deltas.
+    let rows = [
+        (0.001, MeasurementPurpose::ToNearestTransitStop, EntranceKind::Main),
+        (0.002, MeasurementPurpose::ToNearestTransitStop, EntranceKind::CentroidMainBuilding),
+        (0.004, MeasurementPurpose::ToNearestTransitStop, EntranceKind::CentroidArea),
+        (0.001, MeasurementPurpose::ToNearestEntrance, EntranceKind::Main),
+        (0.002, MeasurementPurpose::ToNearestEntrance, EntranceKind::CentroidParcel),
+    ];
+    for (dx, purpose, entrance) in rows {
+        store
+            .insert_poi_focus_measurement(
+                id,
+                &seg(dx),
+                5.0,
+                len(dx),
+                purpose,
+                entrance,
+                MeasurementStartOrigin::PoiFocusCentroid,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    let stats = store.aggregate_poi_focus_measurement_pair_stats().await.unwrap();
+    assert_eq!(
+        stats.main_entrance_vs_centroid.len(),
+        1,
+        "to_nearest_entrance must be excluded from the deltas"
+    );
+    let row = &stats.main_entrance_vs_centroid[0];
+    assert_eq!(row.measurement_type, "to_nearest_transit_stop");
+    assert_eq!(row.n, 2);
+    let d_small = (len(0.002) - len(0.001)) as f64;
+    let d_big = (len(0.004) - len(0.001)) as f64;
+    assert!((row.delta_length_m.min - d_small).abs() < 1.0);
+    assert!((row.delta_length_m.max - d_big).abs() < 1.0);
+    assert!((row.delta_length_m.median - (d_small + d_big) / 2.0).abs() < 1.0);
+    // Same walking speed everywhere: duration delta = length delta × 3600 / 5000.
+    assert!((row.delta_duration_s.max - d_big * 3600.0 / 5000.0).abs() < 1.0);
+
+    db.cleanup().await.ok();
+}
+
+#[tokio::test]
 async fn poi_focus_measurement_destination_warnings_groups_by_bbox() {
     use entrance_analyser_backend::focus_measurements::{
         EntranceKind, MeasurementPurpose, MeasurementStartOrigin,
