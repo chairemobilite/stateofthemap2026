@@ -467,6 +467,15 @@ tables comparing centroid-anchored vs entrance-anchored walks; it does
 **not** include the destination-mismatch warnings above — use the
 dedicated endpoint for those.
 
+The same response also carries `main_entrance_vs_centroid`: per
+`measurement_type`, min / max / mean / median of the **signed delta
+(centroid − main entrance)** in length and duration, over every
+(main, `centroid_*`) measurement pair of the same POI — any centroid
+kind (building, multiple buildings, area, parcel). Positive values
+mean the centroid-anchored walk is longer. `to_nearest_entrance` and
+`to_nearest_main_entrance` are excluded (they measure toward the
+entrance itself).
+
 ### POIs per country (with Quebec subset)
 
 The **Stats** tab also calls `GET /api/analyses/poi_pick_country_stats`
