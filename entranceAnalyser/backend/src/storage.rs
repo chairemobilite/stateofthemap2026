@@ -606,11 +606,12 @@ impl PgStore {
             "WITH pois AS ( \
                  SELECT ST_SetSRID(ST_MakePoint( \
                             (payload->'poi'->'center'->>0)::float8, \
-                            (payload->'poi'->'center'->>1)::float8), 4326) AS pt \
+                            (payload->'poi'->'center'->>1)::float8), 4326) AS pt, \
+                        COALESCE((payload->>'rejected')::boolean, false) AS rejected \
                  FROM analyses \
                  WHERE kind = $1 AND jsonb_typeof(payload->'poi') = 'object' \
              ), located AS ( \
-                 SELECT c.iso_code, c.name, \
+                 SELECT p.rejected, c.iso_code, c.name, \
                         EXISTS (SELECT 1 FROM admin_boundaries q \
                                 WHERE q.level = 'region' AND q.iso_code = 'CA-QC' \
                                   AND ST_Contains(q.geom, p.pt)) AS in_quebec \
@@ -619,7 +620,8 @@ impl PgStore {
                    ON c.level = 'country' AND ST_Contains(c.geom, p.pt) \
              ) \
              SELECT iso_code, name, COUNT(*)::bigint AS n, \
-                    COUNT(*) FILTER (WHERE in_quebec)::bigint AS n_in_quebec \
+                    COUNT(*) FILTER (WHERE in_quebec)::bigint AS n_in_quebec, \
+                    COUNT(*) FILTER (WHERE rejected)::bigint AS n_rejected \
              FROM located \
              GROUP BY iso_code, name \
              ORDER BY n DESC, name",
@@ -643,6 +645,7 @@ impl PgStore {
                     name: r.name.unwrap_or_default(),
                     n: r.n,
                     n_in_quebec: r.n_in_quebec,
+                    n_rejected: r.n_rejected,
                 })
             })
             .collect();
@@ -869,6 +872,8 @@ pub struct PoiPickCountryCount {
     pub name: String,
     pub n: i64,
     pub n_in_quebec: i64,
+    /// Subset of `n` whose pick was rejected by the reviewer.
+    pub n_rejected: i64,
 }
 
 /// Wire shape of `GET /api/analyses/poi_pick_country_stats`.
@@ -891,6 +896,7 @@ struct PoiCountryAggRow {
     name: Option<String>,
     n: i64,
     n_in_quebec: i64,
+    n_rejected: i64,
 }
 
 /// Flat row shape returned by `sqlx::query_as!` — the PostGIS `geom`
