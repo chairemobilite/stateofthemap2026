@@ -594,6 +594,31 @@ async fn legal_decision_transitions_walk_the_state_machine() {
     db.cleanup().await.ok();
 }
 
+/// Setting, changing and clearing the reviewer-chosen place type via
+/// `PATCH { place_type }`; the value round-trips in every response.
+#[tokio::test]
+async fn patch_place_type_sets_changes_and_clears() {
+    let Some((db, app, bbox_id, _overpass)) = setup_pending_picked().await else {
+        return;
+    };
+    // (PATCH body, expected place_type in the response or "").
+    let steps: &[(JsonValue, &str)] = &[
+        (json!({"place_type": "university"}), "university"),
+        (json!({"place_type": "park"}), "park"),
+        (json!({"place_type": null}), ""),
+    ];
+    for (i, (body, expected)) in steps.iter().enumerate() {
+        let (st, resp) = patch_poi_pick_body(&app, bbox_id, body.clone()).await;
+        assert_eq!(st, StatusCode::OK, "step {i}: {resp}");
+        if expected.is_empty() {
+            assert!(resp["place_type"].is_null(), "step {i}: {resp}");
+        } else {
+            assert_eq!(resp["place_type"].as_str(), Some(*expected), "step {i}");
+        }
+    }
+    db.cleanup().await.ok();
+}
+
 /// Each row exercises one illegal body shape and asserts the API
 /// returns 422 without mutating the row. Run against a freshly picked
 /// (pending) row so the only failure mode under test is the body
@@ -610,6 +635,9 @@ async fn legal_decision_transitions_walk_the_state_machine() {
 #[case::reason_with_completed(json!({"completed": true, "rejected_reason": "obsolete"}))]
 // Empty body.
 #[case::empty(json!({}))]
+// place_type must be a known value and must come alone.
+#[case::unknown_place_type(json!({"place_type": "castle"}))]
+#[case::place_type_with_completed(json!({"place_type": "park", "completed": true}))]
 #[tokio::test]
 async fn invalid_decision_bodies_return_422(#[case] body: JsonValue) {
     let Some((db, app, bbox_id, _overpass)) = setup_pending_picked().await else {

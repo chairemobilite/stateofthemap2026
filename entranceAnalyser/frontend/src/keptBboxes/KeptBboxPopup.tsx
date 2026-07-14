@@ -14,7 +14,7 @@
 //! doesn't grow yet another inline component, matching the
 //! one-concept-per-file convention used elsewhere in the package.
 
-import type { KeptBbox, Poi } from '../api';
+import type { KeptBbox, PlaceType, Poi } from '../api';
 import { KeptBboxRow } from './KeptBboxRow';
 import { PoiPickPanel } from './PoiPickPanel';
 import type { ProgressStatus } from './progress';
@@ -33,6 +33,10 @@ export interface KeptBboxPopupProps {
     onPick: (bboxId: string) => void;
     /** Toggle completed; omitted in surfaces that don't persist it. */
     onSetPickCompleted?: (bboxId: string, completed: boolean) => void;
+    /** Reviewer-chosen place type stored on the pick. */
+    pickPlaceType?: PlaceType | null;
+    /** Set or clear the pick's place type; omitting hides the dropdown. */
+    onSetPickPlaceType?: (bboxId: string, placeType: PlaceType | null) => void;
     /** Optional: opens the POI focus map for this bbox. Forwarded to
      *  `<PoiPickPanel />` so the focus button only renders once a
      *  real POI has been picked. */
@@ -72,6 +76,8 @@ export function KeptBboxPopup({
     isSavingPickDecision = false,
     onPick,
     onSetPickCompleted,
+    pickPlaceType = null,
+    onSetPickPlaceType,
     onOpenFocus,
     isOpeningFocus = false,
     onRemoveFromKept,
@@ -91,6 +97,8 @@ export function KeptBboxPopup({
                 isSavingPickDecision={isSavingPickDecision}
                 onPick={onPick}
                 onSetPickCompleted={onSetPickCompleted}
+                pickPlaceType={pickPlaceType}
+                onSetPickPlaceType={onSetPickPlaceType}
                 onOpenFocus={onOpenFocus}
                 isOpeningFocus={isOpeningFocus}
             />

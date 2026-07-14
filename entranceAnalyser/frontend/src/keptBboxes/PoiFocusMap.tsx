@@ -53,12 +53,14 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type {
     KeptBbox,
+    PlaceType,
     Poi,
     PoiFocusMeasurement,
     PoiFocusMeasurementWriteBody,
     PoiFocusResult,
     PoiRejectionReason,
 } from '../api';
+import { PlaceTypeSelect } from './PlaceTypeSelect';
 import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
 import { MapContextMenu, type MapContextMenuItem } from './MapContextMenu';
 import {
@@ -171,6 +173,9 @@ export interface PoiFocusMapProps {
     onSetPoiPickCompleted: (completed: boolean) => void;
     onSetPoiPickRejected: (reason: PoiRejectionReason) => void;
     onSetPoiPickUnrejected: () => void;
+    /** Reviewer-chosen place type stored on the pick (`null` = not set). */
+    poiPickPlaceType?: PlaceType | null;
+    onSetPoiPickPlaceType: (placeType: PlaceType | null) => void;
 }
 
 /** Short labels for the reject-reason radio group + the "Rejected: …" badge. */
@@ -552,6 +557,8 @@ export function PoiFocusMap({
     onSetPoiPickCompleted,
     onSetPoiPickRejected,
     onSetPoiPickUnrejected,
+    poiPickPlaceType = null,
+    onSetPoiPickPlaceType,
 }: PoiFocusMapProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
@@ -1280,6 +1287,12 @@ export function PoiFocusMap({
                     />{' '}
                     POI completed
                 </label>
+                <PlaceTypeSelect
+                    poi={pickedPoi}
+                    placeType={poiPickPlaceType}
+                    disabled={poiPickDecisionSaving}
+                    onChange={onSetPoiPickPlaceType}
+                />
                 {poiPickRejected ? (
                     <div className="poi-focus-map__reject-poi poi-focus-map__reject-poi--rejected">
                         <span className="poi-focus-map__reject-poi__badge">

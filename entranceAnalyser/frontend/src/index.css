@@ -601,6 +601,24 @@ body {
     cursor: pointer;
 }
 
+/* Place-type dropdown (POI popup panel + focus map header). */
+.place-type-select {
+    display: block;
+    margin-top: 0.55rem;
+    font-size: 0.8rem;
+    color: #3f3f46;
+}
+
+.place-type-select select {
+    margin-left: 0.3rem;
+    font-size: 0.8rem;
+}
+
+.poi-focus-map__header .place-type-select {
+    margin-top: 0;
+    white-space: nowrap;
+}
+
 /* Focus map view --------------------------------------------------------- */
 
 .poi-focus-map {

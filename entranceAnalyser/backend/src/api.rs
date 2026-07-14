@@ -57,7 +57,7 @@ use crate::overpass::{parse_osm_ref, OverpassClient, OverpassError, OsmType, Poi
 use crate::poi_config::PoiTagConfig;
 use crate::poi_focus::{fetch_focus, PoiFocusResult};
 use crate::sampler::{SampleError, Sampler, Strategy};
-use crate::storage::{PgStore, PoiPickCountryStats, PoiRejectionReason};
+use crate::storage::{self, PgStore, PoiPickCountryStats, PoiRejectionReason};
 
 /// Public-facing runtime config exposed to the frontend via
 /// `GET /api/config`. Everything in here is safe to ship to clients —
@@ -440,6 +440,9 @@ pub struct PoiPickResponse {
     /// obsolete tag). Counted in the rejection-rate denominator.
     pub rejected: bool,
     pub rejected_reason: Option<PoiRejectionReason>,
+    /// Reviewer-chosen place type (see [`storage::PLACE_TYPES`]);
+    /// `None` falls back to tag-based classification in the stats.
+    pub place_type: Option<String>,
 }
 
 /// Wire body for `PATCH /api/bbox/kept/:id/poi_pick`. The handler
@@ -453,12 +456,27 @@ pub struct PatchPoiPickBody {
     pub completed: Option<bool>,
     pub rejected: Option<bool>,
     pub rejected_reason: Option<PoiRejectionReason>,
+    /// Reviewer-chosen place type. `Some(Some(v))` sets it (v must be
+    /// in [`storage::PLACE_TYPES`]), `Some(None)` clears it back to
+    /// tag-based classification. Uses `double_option` so `null` and
+    /// "field absent" deserialize differently.
+    #[serde(default, deserialize_with = "double_option")]
+    pub place_type: Option<Option<String>>,
+}
+
+/// Deserialize a JSON field so that "absent" → `None` (via
+/// `serde(default)`) while an explicit `null` → `Some(None)`.
+fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(de)?))
 }
 
 /// One reviewer transition. The handler only mutates the row along
-/// one of these three paths per request, which keeps the audit story
+/// one of these paths per request, which keeps the audit story
 /// (and the 422 surface) trivially small.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PoiPickDecision {
     /// Set or clear the `completed` flag (clears any rejection on `true`).
     Completed(bool),
@@ -466,6 +484,8 @@ enum PoiPickDecision {
     Reject(PoiRejectionReason),
     /// Move a previously rejected pick back to pending (does not touch `completed`).
     Unreject,
+    /// Set (`Some`) or clear (`None`) the reviewer-chosen place type.
+    SetPlaceType(Option<String>),
 }
 
 impl PatchPoiPickBody {
@@ -473,6 +493,19 @@ impl PatchPoiPickBody {
     /// Returns the 422 message verbatim so the handler can shape the
     /// response without re-deriving the rule.
     fn decision(&self) -> Result<PoiPickDecision, &'static str> {
+        // `place_type` is its own single-field decision, exclusive of
+        // the reviewer-state fields.
+        if let Some(place_type) = &self.place_type {
+            if self.completed.is_some() || self.rejected.is_some() {
+                return Err("`place_type` cannot be combined with other fields");
+            }
+            if let Some(v) = place_type {
+                if !storage::PLACE_TYPES.contains(&v.as_str()) {
+                    return Err("unknown `place_type`");
+                }
+            }
+            return Ok(PoiPickDecision::SetPlaceType(place_type.clone()));
+        }
         // The order of these arms matters: each accepted shape is
         // matched exactly first, then the more permissive 422 patterns
         // catch every remaining inconsistent combination.
@@ -487,7 +520,7 @@ impl PatchPoiPickBody {
             }
             (_, _, Some(_)) => Err("`rejected_reason` is only valid with `rejected: true`"),
             (None, None, None) => Err(
-                "body must set one of `completed`, `rejected: true` (with `rejected_reason`), or `rejected: false`",
+                "body must set one of `completed`, `rejected: true` (with `rejected_reason`), `rejected: false`, or `place_type`",
             ),
         }
     }
@@ -512,6 +545,7 @@ async fn poi_pick_handler(
             completed: cached.completed,
             rejected: cached.rejected,
             rejected_reason: cached.rejected_reason,
+            place_type: cached.place_type,
         }));
     }
     // Fresh pick: load the bbox so we can bound the Overpass query.
@@ -551,6 +585,7 @@ async fn poi_pick_handler(
         completed: false,
         rejected: false,
         rejected_reason: None,
+        place_type: None,
     }))
 }
 
@@ -577,7 +612,9 @@ async fn patch_poi_pick_handler(
         ))?;
     let needs_picked_poi = matches!(
         decision,
-        PoiPickDecision::Completed(true) | PoiPickDecision::Reject(_)
+        PoiPickDecision::Completed(true)
+            | PoiPickDecision::Reject(_)
+            | PoiPickDecision::SetPlaceType(Some(_))
     );
     if needs_picked_poi && current.poi.is_none() {
         return Err((
@@ -603,6 +640,11 @@ async fn patch_poi_pick_handler(
             .set_poi_pick_rejection(bbox_id, None)
             .await
             .map_err(internal)?,
+        PoiPickDecision::SetPlaceType(place_type) => state
+            .store
+            .set_poi_pick_place_type(bbox_id, place_type)
+            .await
+            .map_err(internal)?,
     };
     // The pre-flight read already proved the row exists; an Ok(None)
     // here would only happen on a concurrent delete, which we surface
@@ -617,6 +659,7 @@ async fn patch_poi_pick_handler(
         completed: payload.completed,
         rejected: payload.rejected,
         rejected_reason: payload.rejected_reason,
+        place_type: payload.place_type,
     }))
 }
 
@@ -637,6 +680,7 @@ async fn poi_picks_handler(
             completed: p.completed,
             rejected: p.rejected,
             rejected_reason: p.rejected_reason,
+            place_type: p.place_type,
         })
         .collect();
     Ok(Json(PoiPicksResponse { picks }))

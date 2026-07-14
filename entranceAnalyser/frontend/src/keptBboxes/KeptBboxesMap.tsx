@@ -34,7 +34,7 @@ import maplibregl, {
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import type { KeptBbox, PoiPickEntry } from '../api';
+import type { KeptBbox, PlaceType, PoiPickEntry } from '../api';
 import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
 import { KeptBboxPopup } from './KeptBboxPopup';
 import {
@@ -64,6 +64,8 @@ export interface KeptBboxesMapProps {
     onPickPoi: (bboxId: string) => void;
     /** Toggle reviewer completed (green overview marker). */
     onSetPickCompleted: (bboxId: string, completed: boolean) => void;
+    /** Set or clear the reviewer-chosen place type of a pick. */
+    onSetPickPlaceType: (bboxId: string, placeType: PlaceType | null) => void;
     /** Triggered by the "Open focus map" button inside the popup.
      *  Optional: when omitted, the popup hides the button entirely. */
     onOpenFocus?: (bboxId: string) => void;
@@ -185,6 +187,7 @@ export function KeptBboxesMap({
     savingPickDecision,
     onPickPoi,
     onSetPickCompleted,
+    onSetPickPlaceType,
     onOpenFocus,
     openingFocus = EMPTY_OPENING_FOCUS,
     onRemoveFromKept,
@@ -200,6 +203,7 @@ export function KeptBboxesMap({
     const pickingRef = useRef(picking);
     const onPickPoiRef = useRef(onPickPoi);
     const onSetPickCompletedRef = useRef(onSetPickCompleted);
+    const onSetPickPlaceTypeRef = useRef(onSetPickPlaceType);
     const onOpenFocusRef = useRef(onOpenFocus);
     const openingFocusRef = useRef(openingFocus);
     const savingDecisionRef = useRef(savingPickDecision);
@@ -220,6 +224,9 @@ export function KeptBboxesMap({
     });
     useEffect(() => {
         onSetPickCompletedRef.current = onSetPickCompleted;
+    });
+    useEffect(() => {
+        onSetPickPlaceTypeRef.current = onSetPickPlaceType;
     });
     useEffect(() => {
         onOpenFocusRef.current = onOpenFocus;
@@ -274,6 +281,10 @@ export function KeptBboxesMap({
                 onPick={(id) => onPickPoiRef.current(id)}
                 onSetPickCompleted={(id, completed) =>
                     void onSetPickCompletedRef.current(id, completed)
+                }
+                pickPlaceType={entry?.place_type ?? null}
+                onSetPickPlaceType={(id, placeType) =>
+                    void onSetPickPlaceTypeRef.current(id, placeType)
                 }
                 onOpenFocus={handleOpenFocus}
                 isOpeningFocus={openingFocusRef.current.has(bbox.id)}
