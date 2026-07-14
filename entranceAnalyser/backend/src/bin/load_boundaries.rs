@@ -13,18 +13,23 @@
 //! entrance-analyser-load-boundaries
 //! ```
 //!
-//! Downloads the admin-0 (countries) and admin-1 (states/provinces)
-//! GeoJSON from the official `natural-earth-vector` repository, then
-//! rewrites `admin_boundaries` in one transaction:
+//! Downloads the admin-0 (countries) GeoJSON from the official
+//! `natural-earth-vector` repository, then rewrites `admin_boundaries`
+//! in one transaction:
 //! * `level='country'` — one row per ISO 3166-1 alpha-2 code (features
 //!   sharing a code are merged with `ST_Union`, name of the largest kept);
 //! * `level='region'`  — the Quebec polygon (`iso_code='CA-QC'`), used
-//!   by the stats to flag POIs that will be analysed separately.
+//!   by the stats to flag POIs that will be analysed separately. It is
+//!   read from the bundled `config/quebec_boundary.geojson` (a
+//!   hand-corrected polygon: Natural Earth's admin-1 river boundary on
+//!   the Ottawa side is coarse enough to push Gatineau POIs outside
+//!   Quebec).
 //!
 //! Geometry parsing/validation is delegated to PostGIS
 //! (`ST_GeomFromGeoJSON` + `ST_MakeValid`). Re-runnable: the table is
-//! truncated inside the same transaction. Pass `--admin0-file` /
-//! `--admin1-file` to reuse previously downloaded GeoJSON.
+//! truncated inside the same transaction. Pass `--admin0-file` to
+//! reuse a previously downloaded GeoJSON, `--quebec-file` to override
+//! the bundled Quebec polygon.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -55,10 +60,15 @@ struct Args {
     #[arg(long)]
     admin0_file: Option<PathBuf>,
 
-    /// Local ne_10m_admin_1_states_provinces.geojson instead of downloading.
+    /// Quebec polygon override (Feature or FeatureCollection GeoJSON).
+    /// Defaults to the bundled `config/quebec_boundary.geojson`.
     #[arg(long)]
-    admin1_file: Option<PathBuf>,
+    quebec_file: Option<PathBuf>,
 }
+
+/// Bundled hand-corrected Quebec polygon (see module docs).
+const DEFAULT_QUEBEC_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../config/quebec_boundary.geojson");
 
 /// One feature staged for insertion: ISO code, display name, and the raw
 /// GeoJSON geometry (parsed server-side by `ST_GeomFromGeoJSON`).
@@ -80,10 +90,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let admin0 = load_geojson(&args.admin0_file, "ne_10m_admin_0_countries").await?;
-    let admin1 = load_geojson(&args.admin1_file, "ne_10m_admin_1_states_provinces").await?;
+    let quebec_path = args
+        .quebec_file
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_QUEBEC_PATH));
 
     let countries = extract_countries(&admin0)?;
-    let quebec = extract_quebec(&admin1)?;
+    let quebec = load_quebec(&quebec_path)?;
     println!(
         "parsed {} country features + Quebec ({} chars of geometry)",
         countries.len(),
@@ -159,19 +172,25 @@ fn extract_countries(
     Ok(out)
 }
 
-/// The single Quebec feature from admin-1 (`iso_3166_2 == "CA-QC"`).
-fn extract_quebec(admin1: &JsonValue) -> Result<StagedBoundary, Box<dyn std::error::Error>> {
-    let features = admin1["features"]
-        .as_array()
-        .ok_or("admin-1 GeoJSON has no features array")?;
-    let quebec = features
-        .iter()
-        .find(|f| prop(f, "iso_3166_2") == Some("CA-QC"))
-        .ok_or("no CA-QC feature in admin-1 GeoJSON")?;
+/// Read the Quebec polygon from a local GeoJSON file — either a bare
+/// geometry, a Feature, or a FeatureCollection whose first feature is
+/// the polygon.
+fn load_quebec(path: &PathBuf) -> Result<StagedBoundary, Box<dyn std::error::Error>> {
+    println!("reading Quebec polygon from {}", path.display());
+    let doc: JsonValue = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+    let geometry = match doc["type"].as_str() {
+        Some("FeatureCollection") => doc["features"]
+            .as_array()
+            .and_then(|f| f.first())
+            .map(|f| f["geometry"].clone())
+            .ok_or("Quebec FeatureCollection has no features")?,
+        Some("Feature") => doc["geometry"].clone(),
+        _ => doc,
+    };
     Ok(StagedBoundary {
         iso_code: "CA-QC".to_string(),
-        name: prop(quebec, "NAME").unwrap_or("Québec").to_string(),
-        geometry_json: quebec["geometry"].to_string(),
+        name: "Québec".to_string(),
+        geometry_json: geometry.to_string(),
     })
 }
 
