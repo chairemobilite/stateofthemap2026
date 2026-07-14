@@ -288,6 +288,7 @@ const QUEBEC_PLACE_TYPE_LABELS: ReadonlyArray<[string, string]> = [
     ['cegep', 'CEGEPs / colleges'],
     ['hospital', 'Hospitals'],
     ['industrial', 'Industrial'],
+    ['park', 'Parks'],
     ['other', 'Other'],
 ];
 

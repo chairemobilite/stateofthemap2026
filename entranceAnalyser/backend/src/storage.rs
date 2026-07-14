@@ -256,6 +256,7 @@ impl PgStore {
             completed: false,
             rejected: false,
             rejected_reason: None,
+            place_type: None,
         });
         sqlx::query(
             "INSERT INTO analyses (bbox_id, kind, value, payload) \
@@ -318,6 +319,23 @@ impl PgStore {
                 payload.rejected_reason = None;
             }
         }
+        self.write_poi_pick_payload(bbox_id, &payload).await?;
+        Ok(Some(payload))
+    }
+
+    /// Set or clear the reviewer-chosen place type on an existing
+    /// `poi_pick` row (`None` reverts to tag-based classification).
+    /// Returns `Ok(None)` when no row exists; caller validates the
+    /// value against [`PLACE_TYPES`].
+    pub async fn set_poi_pick_place_type(
+        &self,
+        bbox_id: Uuid,
+        place_type: Option<String>,
+    ) -> Result<Option<PoiPickPayload>, sqlx::Error> {
+        let Some(mut payload) = self.read_poi_pick_payload(bbox_id).await? else {
+            return Ok(None);
+        };
+        payload.place_type = place_type;
         self.write_poi_pick_payload(bbox_id, &payload).await?;
         Ok(Some(payload))
     }
@@ -588,12 +606,14 @@ impl PgStore {
     }
 
     /// Quebec picks bucketed by place type, with centroid →
-    /// main-entrance distance aggregates. Categories follow the OSM
-    /// tags of the picked POI (first match wins): university
-    /// (`amenity=university` / `education=university`), cegep
-    /// (`amenity=college` / `education=college`), hospital
-    /// (`amenity=hospital` / `healthcare=hospital`), industrial
-    /// (`building=industrial` / `man_made=works`), else `other`.
+    /// main-entrance distance aggregates. The reviewer-chosen
+    /// `place_type` (see [`PLACE_TYPES`]) wins when set; otherwise
+    /// the OSM tags of the picked POI decide (first match wins):
+    /// university (`amenity=university` / `education=university` /
+    /// `building=university`), cegep (`amenity=college` /
+    /// `education=college`), hospital (`amenity=hospital` /
+    /// `healthcare=hospital`), industrial (`building=industrial` /
+    /// `man_made=works`), park (`leisure=park`), else `other`.
     /// Distances aggregate one centroid → entrance walk per POI (see
     /// [`Self::CENTROID_ENTRANCE_WALKS_CTE`]).
     async fn quebec_place_type_stats(
@@ -603,7 +623,8 @@ impl PgStore {
         let rows: Vec<Row> = sqlx::query_as(&format!(
             "WITH walks AS ({walks}), \
              quebec_picks AS ( \
-                 SELECT a.bbox_id, a.payload->'poi'->'tags' AS tags \
+                 SELECT a.bbox_id, a.payload->'poi'->'tags' AS tags, \
+                        a.payload->>'place_type' AS chosen \
                  FROM analyses a \
                  JOIN kept_bboxes k ON k.id = a.bbox_id \
                  WHERE a.kind = $1 AND jsonb_typeof(a.payload->'poi') = 'object' \
@@ -612,16 +633,18 @@ impl PgStore {
                                  AND ST_Contains(q.geom, ST_SetSRID( \
                                      ST_MakePoint(k.center_lon, k.center_lat), 4326))) \
              ), classified AS ( \
-                 SELECT bbox_id, CASE \
+                 SELECT bbox_id, COALESCE(chosen, CASE \
                      WHEN tags->>'amenity' = 'university' \
-                       OR tags->>'education' = 'university' THEN 'university' \
+                       OR tags->>'education' = 'university' \
+                       OR tags->>'building' = 'university' THEN 'university' \
                      WHEN tags->>'amenity' = 'college' \
                        OR tags->>'education' = 'college' THEN 'cegep' \
                      WHEN tags->>'amenity' = 'hospital' \
                        OR tags->>'healthcare' = 'hospital' THEN 'hospital' \
                      WHEN tags->>'building' = 'industrial' \
                        OR tags->>'man_made' = 'works' THEN 'industrial' \
-                     ELSE 'other' END AS place_type \
+                     WHEN tags->>'leisure' = 'park' THEN 'park' \
+                     ELSE 'other' END) AS place_type \
                  FROM quebec_picks \
              ) \
              SELECT c.place_type, \
@@ -1102,7 +1125,17 @@ pub struct PoiPickPayload {
     pub rejected: bool,
     #[serde(default)]
     pub rejected_reason: Option<PoiRejectionReason>,
+    /// Reviewer-chosen place type (one of [`PLACE_TYPES`]). `None`
+    /// means "not set" — the stats then fall back to classifying the
+    /// POI from its OSM tags.
+    #[serde(default)]
+    pub place_type: Option<String>,
 }
+
+/// Place types the reviewer can assign to a pick. The stats bucket
+/// keys match (`cegep` renders as "CEGEPs / colleges"); there is no
+/// "other" — an unset `place_type` falls back to tag classification.
+pub const PLACE_TYPES: [&str; 5] = ["university", "cegep", "hospital", "industrial", "park"];
 
 /// POI counts for one country, returned by
 /// [`PgStore::aggregate_poi_pick_country_stats`]. Quebec POIs are

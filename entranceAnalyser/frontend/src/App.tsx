@@ -207,6 +207,9 @@ function App() {
                         onSetPickCompleted={(id, completed) => {
                             void poiPicks.setPickCompleted(id, completed);
                         }}
+                        onSetPickPlaceType={(id, placeType) => {
+                            void poiPicks.setPickPlaceType(id, placeType);
+                        }}
                         onOpenFocus={handleOpenFocus}
                         openingFocus={poiFocus.loading}
                         onRemoveFromKept={handleRemoveKept}
@@ -248,6 +251,10 @@ function App() {
                         }}
                         onSetPoiPickUnrejected={() => {
                             void poiPicks.setPickUnrejected(focusBbox.id);
+                        }}
+                        poiPickPlaceType={focusPick.place_type ?? null}
+                        onSetPoiPickPlaceType={(placeType) => {
+                            void poiPicks.setPickPlaceType(focusBbox.id, placeType);
                         }}
                         focus={poiFocus.focuses[focusBbox.id]}
                         loading={poiFocus.loading.has(focusBbox.id)}

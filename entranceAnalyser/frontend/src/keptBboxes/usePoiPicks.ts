@@ -22,6 +22,7 @@ import {
     fetchPoiPicks,
     patchPoiPickDecision,
     pickPoi,
+    type PlaceType,
     type PoiPickDecision,
     type PoiPickEntry,
     type PoiPickRecord,
@@ -46,6 +47,7 @@ function recordToEntry(row: PoiPickRecord): PoiPickEntry {
         completed: row.completed ?? false,
         rejected: row.rejected ?? false,
         rejected_reason: row.rejected_reason ?? null,
+        place_type: row.place_type ?? null,
     };
 }
 
@@ -72,6 +74,8 @@ export interface PoiPicksState {
     setPickRejected: (bboxId: string, reason: PoiRejectionReason) => Promise<void>;
     /** Clear the rejection (back to pending). Idempotent. */
     setPickUnrejected: (bboxId: string) => Promise<void>;
+    /** Set (or clear with `null`) the reviewer-chosen place type. */
+    setPickPlaceType: (bboxId: string, placeType: PlaceType | null) => Promise<void>;
     /** Drop local pick state after the bbox was removed from `kept_bboxes`. */
     removePickForBbox: (bboxId: string) => void;
     reload: () => Promise<void>;
@@ -208,6 +212,12 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
         [runDecision],
     );
 
+    const setPickPlaceType = useCallback(
+        (bboxId: string, placeType: PlaceType | null) =>
+            runDecision(bboxId, { kind: 'place_type', value: placeType }),
+        [runDecision],
+    );
+
     return {
         picks,
         picking,
@@ -218,6 +228,7 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
         setPickCompleted,
         setPickRejected,
         setPickUnrejected,
+        setPickPlaceType,
         removePickForBbox,
         reload,
     };

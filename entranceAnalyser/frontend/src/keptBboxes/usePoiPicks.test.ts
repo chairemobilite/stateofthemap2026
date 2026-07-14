@@ -37,6 +37,7 @@ const PENDING_ENTRY = (overrides: Partial<PoiPickRecord> = {}) => {
         completed: r.completed,
         rejected: r.rejected,
         rejected_reason: r.rejected_reason,
+        place_type: r.place_type ?? null,
     };
 };
 

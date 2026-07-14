@@ -200,6 +200,12 @@ export type PoiRejectionReason = 'no_imagery' | 'obsolete' | 'other';
  *  `completed` and `rejected` are the two terminal reviewer states and
  *  are mutually exclusive. When both are `false` the pick is "pending".
  *  `rejected_reason` is non-null iff `rejected` is `true`. */
+/** Place types the reviewer can assign to a pick. Mirrors
+ *  `PLACE_TYPES` in `backend/src/storage.rs`; there is no "other" —
+ *  an unset place type falls back to tag classification in the stats. */
+export const PLACE_TYPES = ['university', 'cegep', 'hospital', 'industrial', 'park'] as const;
+export type PlaceType = (typeof PLACE_TYPES)[number];
+
 export interface PoiPickRecord {
     bbox_id: string;
     poi: Poi | null;
@@ -208,6 +214,9 @@ export interface PoiPickRecord {
     /** Reviewer flag: POI dropped from the analysis (red/grey marker on the focus map). */
     rejected: boolean;
     rejected_reason: PoiRejectionReason | null;
+    /** Reviewer-chosen place type; `null` (or missing on older
+     *  backends) means "classify from tags". */
+    place_type?: PlaceType | null;
 }
 
 /** Cached pick row merged into `usePoiPicks` state (no `bbox_id` in value). */
@@ -216,16 +225,18 @@ export interface PoiPickEntry {
     completed: boolean;
     rejected: boolean;
     rejected_reason: PoiRejectionReason | null;
+    place_type?: PlaceType | null;
 }
 
-/** Discriminated union of the three reviewer transitions accepted by
+/** Discriminated union of the reviewer transitions accepted by
  *  `PATCH /api/bbox/kept/:id/poi_pick`. The wire shape is built by
  *  [`patchPoiPickDecision`] so callers never craft the JSON body
  *  manually. Mirrors the backend `PoiPickDecision` enum. */
 export type PoiPickDecision =
     | { kind: 'completed'; value: boolean }
     | { kind: 'rejected'; reason: PoiRejectionReason }
-    | { kind: 'unreject' };
+    | { kind: 'unreject' }
+    | { kind: 'place_type'; value: PlaceType | null };
 
 const ANALYSES_BASE = '/api/analyses';
 
@@ -271,9 +282,12 @@ export async function patchPoiPickDecision(
 /** Project a [`PoiPickDecision`] onto the wire body the backend
  *  expects. Exported so unit tests can assert the projection without
  *  re-running the fetch. */
-export function decisionToBody(
-    decision: PoiPickDecision,
-): { completed?: boolean; rejected?: boolean; rejected_reason?: PoiRejectionReason } {
+export function decisionToBody(decision: PoiPickDecision): {
+    completed?: boolean;
+    rejected?: boolean;
+    rejected_reason?: PoiRejectionReason;
+    place_type?: PlaceType | null;
+} {
     switch (decision.kind) {
         case 'completed':
             return { completed: decision.value };
@@ -281,6 +295,8 @@ export function decisionToBody(
             return { rejected: true, rejected_reason: decision.reason };
         case 'unreject':
             return { rejected: false };
+        case 'place_type':
+            return { place_type: decision.value };
     }
 }
 

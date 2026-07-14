@@ -515,17 +515,27 @@ have a **Quebec-only copy** (`main_entrance_vs_centroid_endpoints_quebec`,
 `centroid_to_main_entrance_histogram_quebec`): the same computations
 restricted to those bboxes.
 
-`quebec_by_place_type` buckets the Quebec picks by OSM tags —
-university (`amenity=university` / `education=university`), cegep
-(`amenity=college` / `education=college`), hospital (`amenity=hospital`
-/ `healthcare=hospital`), industrial (`building=industrial` /
-`man_made=works`), else `other` — with the POI count and min / max /
-mean / median centroid → entrance walking distance per bucket (both
-entrance-targeting measurement types). To
-make this classification possible, keeping a custom-OSM bbox now
-fetches the object's tags from Overpass and stores them on the pick
-(best effort; the pick's group is derived from `poi_tags.yml` when the
-tags match one).
+`quebec_by_place_type` buckets the Quebec picks by place type, with
+the POI count and min / max / mean / median centroid → entrance
+walking distance per bucket (both entrance-targeting measurement
+types). The reviewer-chosen `place_type` on the pick wins when set;
+otherwise the OSM tags decide — university (`amenity=university` /
+`education=university` / `building=university`), cegep
+(`amenity=college` / `education=college`), hospital
+(`amenity=hospital` / `healthcare=hospital`), industrial
+(`building=industrial` / `man_made=works`), park (`leisure=park`),
+else `other`. To make the tag fallback possible, keeping a custom-OSM
+bbox fetches the object's tags from Overpass and stores them on the
+pick (best effort; the pick's group is derived from `poi_tags.yml`
+when the tags match one).
+
+**Place-type dropdown.** The POI popup panel and the focus-map header
+both show a **Place type** dropdown (University, College / CEGEP,
+Hospital, Industrial, Park). It preselects the type autodetected from
+the POI's tags (marked "(detected)") but any choice can be overridden;
+picking an option persists it via `PATCH /poi_pick { place_type }`,
+and there is no "other" option — clearing the dropdown reverts to
+tag-based classification.
 
 ### POIs per country (Quebec reported separately)
 
@@ -575,10 +585,13 @@ The binary downloads Natural Earth 1:10m GeoJSON (official
 `natural-earth-vector` GitHub mirror) and rewrites `admin_boundaries`
 in one transaction: every country (`level='country'`, ISO 3166-1
 alpha-2, features sharing a code merged with `ST_Union`) plus the
-Quebec polygon (`level='region'`, `CA-QC`). The connection comes from
-the workspace `.env` (`PG_CONNECTION_STRING_PREFIX` + `PG_DATABASE`);
-`--database-url`, `--admin0-file` and `--admin1-file` override the
-target and the downloads.
+Quebec polygon (`level='region'`, `CA-QC`). Quebec comes from the
+bundled `config/quebec_boundary.geojson` — a hand-corrected polygon,
+because Natural Earth's admin-1 boundary along the Ottawa River is
+coarse enough to push Gatineau POIs outside Quebec. The connection
+comes from the workspace `.env` (`PG_CONNECTION_STRING_PREFIX` +
+`PG_DATABASE`); `--database-url`, `--admin0-file` and `--quebec-file`
+override the target and the inputs.
 
 **1. China datum offset.** Chinese law requires consumer maps to
 **1. Pano-viewer deeplinks: GSV is the exception, not the rule.**

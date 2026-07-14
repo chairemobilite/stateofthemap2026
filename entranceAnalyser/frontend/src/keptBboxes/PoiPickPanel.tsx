@@ -26,7 +26,8 @@
 //! click handler are passed in, so the parent (`KeptBboxesMap`) keeps
 //! ownership of the pick state via `usePoiPicks`.
 
-import type { Poi } from '../api';
+import type { PlaceType, Poi } from '../api';
+import { PlaceTypeSelect } from './PlaceTypeSelect';
 
 export interface PoiPickPanelProps {
     bboxId: string;
@@ -43,6 +44,11 @@ export interface PoiPickPanelProps {
     onPick: (bboxId: string) => void;
     /** Toggle overview "completed" state; only shown when a real POI exists. */
     onSetPickCompleted?: (bboxId: string, completed: boolean) => void;
+    /** Reviewer-chosen place type stored on the pick (`null` = not set). */
+    pickPlaceType?: PlaceType | null;
+    /** Set or clear the place type; the dropdown is only rendered
+     *  when the handler is provided and a real POI exists. */
+    onSetPickPlaceType?: (bboxId: string, placeType: PlaceType | null) => void;
     /** Optional handler that opens the POI focus map. The button is
      *  rendered (and enabled) only when a real POI was picked, since
      *  the focus query is anchored on the pick's centre coords.
@@ -85,6 +91,8 @@ export function PoiPickPanel({
     isSavingPickDecision = false,
     onPick,
     onSetPickCompleted,
+    pickPlaceType = null,
+    onSetPickPlaceType,
     onOpenFocus,
     isOpeningFocus = false,
 }: PoiPickPanelProps) {
@@ -148,6 +156,14 @@ export function PoiPickPanel({
                     </>
                 )}
             </dl>
+            {onSetPickPlaceType && (
+                <PlaceTypeSelect
+                    poi={pickedPoi}
+                    placeType={pickPlaceType}
+                    disabled={isSavingPickDecision}
+                    onChange={(placeType) => onSetPickPlaceType(bboxId, placeType)}
+                />
+            )}
             {onOpenFocus && (
                 <button
                     type="button"
