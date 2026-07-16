@@ -16,6 +16,7 @@ import {
     mapillaryUrl,
     osmEditorMapSegment,
     osmEditorUrl,
+    osmEditorUrlForPoi,
     panoramaxUrl,
     type MapPoint,
 } from './mapLinks';
@@ -102,6 +103,26 @@ describe('mapLinks', () => {
             expect(osmEditorUrl(template, MTL)).toBe(
                 'https://example.org/45.5017,-73.5673/20#{not_a_placeholder}',
             );
+        });
+    });
+
+    describe('osmEditorUrlForPoi', () => {
+        it('appends the OSM feature id to a hash-based editor URL', () => {
+            const url = osmEditorUrlForPoi(
+                'https://example.org/id/#map={zoom}/{lat}/{lon}',
+                { osm_type: 'way', osm_id: 25540794, center: [-73.4711246, 45.4717765] },
+            );
+            expect(url).toBe(
+                'https://example.org/id/#map=20/45.4717765/-73.4711246&id=w25540794',
+            );
+        });
+
+        it('skips the id for synthetic sampling centroids', () => {
+            const url = osmEditorUrlForPoi(
+                'https://example.org/id/#map={zoom}/{lat}/{lon}',
+                { osm_type: 'node', osm_id: 0, center: [-73.5, 45.5] },
+            );
+            expect(url).toBe('https://example.org/id/#map=20/45.5/-73.5');
         });
     });
 

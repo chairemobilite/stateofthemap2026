@@ -33,3 +33,18 @@ export const PROGRESS_LABELS: Record<ProgressStatus, string> = {
     completed: 'Completed',
     failed: 'Failed',
 };
+
+/** Map a cached POI pick to the shared progress union. */
+export function progressFromPoiPick(
+    pickedPoi: { osm_type: string; osm_id: number } | null | undefined,
+    isPicking: boolean,
+    pickCompleted: boolean,
+): ProgressStatus {
+    if (isPicking) return 'running';
+    if (pickedPoi !== undefined) {
+        if (pickedPoi === null) return 'done';
+        if (pickCompleted) return 'completed';
+        return 'active';
+    }
+    return 'not_started';
+}

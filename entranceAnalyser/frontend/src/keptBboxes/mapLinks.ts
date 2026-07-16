@@ -182,3 +182,23 @@ export function osmEditorUrl(template: string, { lat, lon }: Pick<MapPoint, 'lat
         .replaceAll('{lon}', String(lon))
         .replaceAll('{zoom}', String(OSM_EDITOR_DEFAULT_ZOOM));
 }
+
+/**
+ * iD permalink for one picked OSM feature. Uses the backend template
+ * for map position and appends `&id={type}{id}` when the pick is a
+ * real OSM object (not a synthetic sampling centroid).
+ *
+ * @param template - URL with `{lat}` / `{lon}` / `{zoom}` placeholders.
+ * @param poi      - Picked feature (`center` is `[lon, lat]`).
+ */
+export function osmEditorUrlForPoi(
+    template: string,
+    poi: { osm_type: string; osm_id: number; center: [number, number] },
+): string {
+    const [lon, lat] = poi.center;
+    let url = osmEditorUrl(template, { lat, lon });
+    if (poi.osm_type === 'node' && poi.osm_id === 0) return url;
+    const id = `${poi.osm_type[0]}${poi.osm_id}`;
+    url += url.includes('#') ? `&id=${id}` : `#id=${id}`;
+    return url;
+}
