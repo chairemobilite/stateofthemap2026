@@ -26,7 +26,9 @@ export interface TufteHistogramProps {
 }
 
 const CHART_HEIGHT = 180;
-const BAR_WIDTH = 44;
+// Wide enough for the longest bin label ("750–1000") to stay clear of its
+// neighbours — labels are centred under bars this wide, not just the digits.
+const BAR_WIDTH = 60;
 const BAR_GAP = 2; // histogram bins are contiguous, keep only a hairline
 const TOP_PAD = 22; // room for the count printed above each bar
 const BOTTOM_PAD = 20; // room for the bin label
