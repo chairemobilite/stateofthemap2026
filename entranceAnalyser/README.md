@@ -502,9 +502,11 @@ Finally, `centroid_to_main_entrance_histogram` feeds a Tufte-style
 centroid to the entrance**: one measurement per POI —
 `to_nearest_main_entrance` preferred over `to_nearest_entrance` (then
 the most recent), anchored on any `centroid_*` kind — so a POI with
-both types is not double-counted. 25 m bins
-(`bin_start_m`, `n`; empty bins omitted), with everything at 250 m and
-more collected in an open-ended last bin rendered as "250+".
+both types is not double-counted. Three bin widths
+(`bin_start_m`, `n`; empty bins omitted): 25 m bins up to 250 m, then
+250 m bins up to 1000 m (rendered as "250–500", "500–750",
+"750–1000"), with everything at 1000 m and more collected in an
+open-ended last bin rendered as "1000+".
 
 Quebec POIs (kept bboxes whose centre falls inside the Quebec polygon
 of `admin_boundaries`) are analysed separately: **every world-level
