@@ -9,42 +9,13 @@
 //!
 //! Shows the stored `place_type` when set, otherwise the value
 //! autodetected from the POI's OSM tags (mirrors the SQL fallback in
-//! `backend/src/storage.rs`), otherwise "— (pick one)". There is no
-//! "other" option: leaving it unset keeps tag-based classification.
-//! Picking an option persists it via `PATCH /poi_pick`; the detected
-//! value is also persisted on change so what you see is what is stored.
+//! `backend/src/storage.rs`), otherwise "— (pick one)". Picking an
+//! option persists it via `PATCH /poi_pick`.
 
-import { PLACE_TYPES, type PlaceType, type Poi } from '../api';
+import { type PlaceType, type Poi } from '../api';
+import { detectPlaceType, PLACE_TYPES, PLACE_TYPE_LABELS } from './placeTypes';
 
-/** Human labels, in dropdown order. */
-const PLACE_TYPE_LABELS: Record<PlaceType, string> = {
-    university: 'University',
-    cegep: 'College / CEGEP',
-    hospital: 'Hospital',
-    industrial: 'Industrial',
-    park: 'Park',
-};
-
-/**
- * Classify a POI from its OSM tags — same rules (and order) as the
- * SQL fallback in `quebec_place_type_stats`. Returns `null` when no
- * rule matches (the "other" case: the dropdown stays empty).
- * @param tags Raw OSM tags of the picked POI.
- */
-export function detectPlaceType(tags: Record<string, string>): PlaceType | null {
-    if (
-        tags['amenity'] === 'university' ||
-        tags['education'] === 'university' ||
-        tags['building'] === 'university'
-    ) {
-        return 'university';
-    }
-    if (tags['amenity'] === 'college' || tags['education'] === 'college') return 'cegep';
-    if (tags['amenity'] === 'hospital' || tags['healthcare'] === 'hospital') return 'hospital';
-    if (tags['building'] === 'industrial' || tags['man_made'] === 'works') return 'industrial';
-    if (tags['leisure'] === 'park') return 'park';
-    return null;
-}
+export { detectPlaceType } from './placeTypes';
 
 export interface PlaceTypeSelectProps {
     /** Picked POI whose tags feed the autodetection. */

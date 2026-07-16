@@ -521,23 +521,22 @@ restricted to those bboxes.
 the POI count and min / max / mean / median centroid → entrance
 walking distance per bucket (both entrance-targeting measurement
 types). The reviewer-chosen `place_type` on the pick wins when set;
-otherwise the OSM tags decide — university (`amenity=university` /
-`education=university` / `building=university`), cegep
-(`amenity=college` / `education=college`), hospital
-(`amenity=hospital` / `healthcare=hospital`), industrial
-(`building=industrial` / `man_made=works`), park (`leisure=park`),
-else `other`. To make the tag fallback possible, keeping a custom-OSM
-bbox fetches the object's tags from Overpass and stores them on the
-pick (best effort; the pick's group is derived from `poi_tags.yml`
-when the tags match one).
+otherwise the OSM tags are classified via the rules in
+[`place_types.rs`](backend/src/place_types.rs) (universities and
+satellite campuses, national and municipal parks, shopping centres,
+stadiums, schools, transit, clinics, etc.), else `other`. Legacy
+reviewer value `park` is normalized to `municipal_park`. To make the
+tag fallback possible, keeping a custom-OSM bbox fetches the object's
+tags from Overpass and stores them on the pick (best effort; the
+pick's group is derived from `poi_tags.yml` when the tags match one).
 
 **Place-type dropdown.** The POI popup panel and the focus-map header
-both show a **Place type** dropdown (University, College / CEGEP,
-Hospital, Industrial, Park). It preselects the type autodetected from
-the POI's tags (marked "(detected)") but any choice can be overridden;
-picking an option persists it via `PATCH /poi_pick { place_type }`,
-and there is no "other" option — clearing the dropdown reverts to
-tag-based classification.
+both show a **Place type** dropdown (see labels in
+[`placeTypes.ts`](frontend/src/keptBboxes/placeTypes.ts)). It
+preselects the type autodetected from the POI's tags (marked
+"(detected)") but any choice can be overridden; picking an option
+persists it via `PATCH /poi_pick { place_type }`, and clearing the
+dropdown reverts to tag-based classification.
 
 ### POIs per country (Quebec reported separately)
 

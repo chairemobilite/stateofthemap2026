@@ -610,11 +610,9 @@ impl PgStore {
     /// main-entrance distance aggregates. The reviewer-chosen
     /// `place_type` (see [`PLACE_TYPES`]) wins when set; otherwise
     /// the OSM tags of the picked POI decide (first match wins):
-    /// university (`amenity=university` / `education=university` /
-    /// `building=university`), cegep (`amenity=college` /
-    /// `education=college`), hospital (`amenity=hospital` /
-    /// `healthcare=hospital`), industrial (`building=industrial` /
-    /// `man_made=works`), park (`leisure=park`), else `other`.
+    /// the tag rules in [`crate::place_types::TAG_FALLBACK_SQL`], else
+    /// `other`. Legacy reviewer value `park` is normalized to
+    /// `municipal_park`.
     /// Distances aggregate one centroid → entrance walk per POI (see
     /// [`Self::CENTROID_ENTRANCE_WALKS_CTE`]).
     async fn quebec_place_type_stats(
@@ -634,18 +632,9 @@ impl PgStore {
                                  AND ST_Contains(q.geom, ST_SetSRID( \
                                      ST_MakePoint(k.center_lon, k.center_lat), 4326))) \
              ), classified AS ( \
-                 SELECT bbox_id, COALESCE(chosen, CASE \
-                     WHEN tags->>'amenity' = 'university' \
-                       OR tags->>'education' = 'university' \
-                       OR tags->>'building' = 'university' THEN 'university' \
-                     WHEN tags->>'amenity' = 'college' \
-                       OR tags->>'education' = 'college' THEN 'cegep' \
-                     WHEN tags->>'amenity' = 'hospital' \
-                       OR tags->>'healthcare' = 'hospital' THEN 'hospital' \
-                     WHEN tags->>'building' = 'industrial' \
-                       OR tags->>'man_made' = 'works' THEN 'industrial' \
-                     WHEN tags->>'leisure' = 'park' THEN 'park' \
-                     ELSE 'other' END) AS place_type \
+                 SELECT bbox_id, COALESCE( \
+                     CASE WHEN chosen = 'park' THEN 'municipal_park' ELSE chosen END, \
+                     CASE {tag_fallback} END) AS place_type \
                  FROM quebec_picks \
              ) \
              SELECT c.place_type, \
@@ -660,6 +649,7 @@ impl PgStore {
              GROUP BY c.place_type \
              ORDER BY c.place_type",
             walks = Self::CENTROID_ENTRANCE_WALKS_CTE,
+            tag_fallback = crate::place_types::TAG_FALLBACK_SQL,
         ))
         .bind(POI_PICK_KIND)
         .fetch_all(pool)
@@ -1144,9 +1134,10 @@ pub struct PoiPickPayload {
 }
 
 /// Place types the reviewer can assign to a pick. The stats bucket
-/// keys match (`cegep` renders as "CEGEPs / colleges"); there is no
-/// "other" — an unset `place_type` falls back to tag classification.
-pub const PLACE_TYPES: [&str; 5] = ["university", "cegep", "hospital", "industrial", "park"];
+/// keys match the frontend labels in `placeTypes.ts`. Unset
+/// `place_type` falls back to tag classification; reviewers may also
+/// choose `other` explicitly.
+pub use crate::place_types::PLACE_TYPES;
 
 /// POI counts for one country, returned by
 /// [`PgStore::aggregate_poi_pick_country_stats`]. Quebec POIs are
