@@ -364,6 +364,60 @@ body {
     border-color: #1d4ed8;
 }
 
+/* -------- POI list (started / completed picks) ------------------------------ */
+
+.poi-list-page__tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.75rem;
+}
+
+.poi-list-page__tabs button {
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 0.3rem 0.75rem;
+    font: inherit;
+    cursor: pointer;
+    background: #fff;
+}
+
+.poi-list-page__tabs button[aria-pressed='true'] {
+    background: #1d4ed8;
+    color: #fff;
+    border-color: #1d4ed8;
+}
+
+.poi-list-page__table .place-type-select {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.85rem;
+}
+
+.poi-list-page__table .place-type-select select {
+    max-width: 14rem;
+}
+
+.poi-list-page__name {
+    display: block;
+    font-weight: 600;
+}
+
+.poi-list-page__meta {
+    display: block;
+    font-size: 0.8rem;
+    color: #64748b;
+}
+
+.poi-list-page__focus {
+    font: inherit;
+    cursor: pointer;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    background: #fff;
+}
+
 .kept-bbox-row {
     padding: 0.75rem 1rem;
     background: #fff;

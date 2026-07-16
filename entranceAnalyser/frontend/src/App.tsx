@@ -12,6 +12,7 @@ import { CustomCentroidModal } from './CustomCentroidModal';
 import { BASEMAPS, DEFAULT_BASEMAP_ID, type BasemapId } from './basemaps';
 import { KeptBboxesMap } from './keptBboxes/KeptBboxesMap';
 import { MeasurementStatsPage } from './MeasurementStatsPage';
+import { PoiListPage } from './PoiListPage';
 import { PoiFocusMap } from './keptBboxes/PoiFocusMap';
 import { useKeptBboxes } from './keptBboxes/useKeptBboxes';
 import { usePoiFocus } from './keptBboxes/usePoiFocus';
@@ -32,7 +33,7 @@ import { DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M } from './keptBboxes/mea
  *  doc comment for the rationale. */
 const FALLBACK_OSM_EDITOR_URL = 'https://www.openstreetmap.org/edit#map=20/{lat}/{lon}';
 
-type AppView = 'sampling' | 'kept' | 'focus' | 'stats';
+type AppView = 'sampling' | 'kept' | 'focus' | 'stats' | 'poi-list';
 
 const REMOVE_KEPT_CONFIRM =
     'Remove this cell from kept? Cached POI picks, focus results, and measurements will be deleted.';
@@ -150,6 +151,13 @@ function App() {
                     >
                         Stats
                     </button>
+                    <button
+                        type="button"
+                        aria-pressed={view === 'poi-list'}
+                        onClick={() => setView('poi-list')}
+                    >
+                        POI list
+                    </button>
                 </nav>
             )}
 
@@ -190,6 +198,29 @@ function App() {
                         const name = pick?.poi?.tags?.name;
                         return name ? `${name} (${bboxId})` : bboxId;
                     }}
+                />
+            )}
+
+            {view === 'poi-list' && (
+                <PoiListPage
+                    keptBboxes={kept.keptBboxes}
+                    picks={poiPicks.picks}
+                    savingDecision={poiPicks.savingDecision}
+                    onSetPickPlaceType={(id, placeType) => {
+                        void poiPicks.setPickPlaceType(id, placeType);
+                    }}
+                    onOpenPoiFocus={handleOpenFocus}
+                    osmEditorUrlTemplate={
+                        appConfig.config?.osm_editor_url ?? FALLBACK_OSM_EDITOR_URL
+                    }
+                    loading={kept.status === 'loading' || poiPicks.status === 'loading'}
+                    error={
+                        kept.status === 'error'
+                            ? kept.error
+                            : poiPicks.status === 'error'
+                              ? poiPicks.error
+                              : null
+                    }
                 />
             )}
 

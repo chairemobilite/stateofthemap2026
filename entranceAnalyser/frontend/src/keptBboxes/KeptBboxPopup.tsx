@@ -17,7 +17,7 @@
 import type { KeptBbox, PlaceType, Poi } from '../api';
 import { KeptBboxRow } from './KeptBboxRow';
 import { PoiPickPanel } from './PoiPickPanel';
-import type { ProgressStatus } from './progress';
+import { progressFromPoiPick, type ProgressStatus } from './progress';
 
 export interface KeptBboxPopupProps {
     bbox: KeptBbox;
@@ -59,13 +59,7 @@ function progressFromPick(
     isPicking: boolean,
     pickCompleted: boolean,
 ): ProgressStatus {
-    if (isPicking) return 'running';
-    if (pickedPoi !== undefined) {
-        if (pickedPoi === null) return 'done';
-        if (pickCompleted) return 'completed';
-        return 'active';
-    }
-    return 'not_started';
+    return progressFromPoiPick(pickedPoi, isPicking, pickCompleted);
 }
 
 export function KeptBboxPopup({
