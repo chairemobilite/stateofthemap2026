@@ -21,6 +21,7 @@ pub mod lzw_transcode;
 pub mod measurement_destination_warnings;
 pub mod mollweide;
 pub mod overpass;
+pub mod place_types;
 pub mod poi_config;
 pub mod poi_focus;
 pub mod sampler;

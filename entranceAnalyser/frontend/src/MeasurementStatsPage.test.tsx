@@ -365,14 +365,14 @@ describe('<MeasurementStatsPage />', () => {
             expect(screen.getByText('Quebec POIs by place type')).toBeInTheDocument();
         });
 
-        const uniRow = screen.getByText('Universities').closest('tr')!;
+        const uniRow = screen.getByText('University').closest('tr')!;
         // Cells: label | POIs | measurements | min | max | avg | median.
         expect(uniRow.children[1]).toHaveTextContent('2');
         expect(uniRow.children[2]).toHaveTextContent('3');
         expect(uniRow.children[3]).toHaveTextContent('10.0');
         expect(uniRow.children[6]).toHaveTextContent('30.0');
         // No measurement yet: dashes instead of numbers.
-        const hospitalRow = screen.getByText('Hospitals').closest('tr')!;
+        const hospitalRow = screen.getByText('Hospital').closest('tr')!;
         expect(hospitalRow.children[1]).toHaveTextContent('1');
         expect(hospitalRow.children[3]).toHaveTextContent('—');
         // Buckets absent from the payload are not rendered.

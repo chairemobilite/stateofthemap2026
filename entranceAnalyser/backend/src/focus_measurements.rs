@@ -352,8 +352,7 @@ pub struct PoiFocusMeasurementStats {
     /// Same histogram, restricted to Quebec bboxes.
     #[serde(default)]
     pub centroid_to_main_entrance_histogram_quebec: Vec<MeasurementHistogramBin>,
-    /// Quebec picks bucketed by place type (university, cegep,
-    /// hospital, industrial, other) with centroid → main-entrance
+    /// Quebec picks bucketed by place type (see [`crate::place_types`]).
     /// distance aggregates. Empty buckets are omitted.
     #[serde(default)]
     pub quebec_by_place_type: Vec<QuebecPlaceTypeStat>,

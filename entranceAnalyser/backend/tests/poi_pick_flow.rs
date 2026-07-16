@@ -604,7 +604,8 @@ async fn patch_place_type_sets_changes_and_clears() {
     // (PATCH body, expected place_type in the response or "").
     let steps: &[(JsonValue, &str)] = &[
         (json!({"place_type": "university"}), "university"),
-        (json!({"place_type": "park"}), "park"),
+        (json!({"place_type": "municipal_park"}), "municipal_park"),
+        (json!({"place_type": "other"}), "other"),
         (json!({"place_type": null}), ""),
     ];
     for (i, (body, expected)) in steps.iter().enumerate() {
@@ -637,7 +638,7 @@ async fn patch_place_type_sets_changes_and_clears() {
 #[case::empty(json!({}))]
 // place_type must be a known value and must come alone.
 #[case::unknown_place_type(json!({"place_type": "castle"}))]
-#[case::place_type_with_completed(json!({"place_type": "park", "completed": true}))]
+#[case::place_type_with_completed(json!({"place_type": "municipal_park", "completed": true}))]
 #[tokio::test]
 async fn invalid_decision_bodies_return_422(#[case] body: JsonValue) {
     let Some((db, app, bbox_id, _overpass)) = setup_pending_picked().await else {

@@ -201,10 +201,8 @@ export type PoiRejectionReason = 'no_imagery' | 'obsolete' | 'other';
  *  are mutually exclusive. When both are `false` the pick is "pending".
  *  `rejected_reason` is non-null iff `rejected` is `true`. */
 /** Place types the reviewer can assign to a pick. Mirrors
- *  `PLACE_TYPES` in `backend/src/storage.rs`; there is no "other" —
- *  an unset place type falls back to tag classification in the stats. */
-export const PLACE_TYPES = ['university', 'cegep', 'hospital', 'industrial', 'park'] as const;
-export type PlaceType = (typeof PLACE_TYPES)[number];
+ *  `PLACE_TYPES` in `backend/src/place_types.rs`. */
+export { PLACE_TYPES, type PlaceType } from './keptBboxes/placeTypes';
 
 export interface PoiPickRecord {
     bbox_id: string;
@@ -577,8 +575,7 @@ export interface PoiFocusMeasurementStats {
     centroid_to_main_entrance_histogram?: MeasurementHistogramBin[];
     /** Quebec-only copy of `centroid_to_main_entrance_histogram`. */
     centroid_to_main_entrance_histogram_quebec?: MeasurementHistogramBin[];
-    /** Quebec picks bucketed by place type (university, cegep,
-     *  hospital, industrial, other). Empty buckets omitted. */
+    /** Quebec picks bucketed by place type (see `placeTypes.ts`). */
     quebec_by_place_type?: QuebecPlaceTypeStat[];
 }
 

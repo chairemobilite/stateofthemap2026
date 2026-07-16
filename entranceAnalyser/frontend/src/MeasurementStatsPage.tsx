@@ -23,6 +23,7 @@ import {
     type PoiPickCountryStats,
     type QuebecPlaceTypeStat,
 } from './api';
+import { QUEBEC_PLACE_TYPE_LABELS } from './keptBboxes/placeTypes';
 import {
     DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M,
     aggregateDestinationWarningsByMessage,
@@ -283,14 +284,7 @@ function EndpointAgreementCharts({
 }
 
 /** Human labels for the Quebec place-type buckets, in display order. */
-const QUEBEC_PLACE_TYPE_LABELS: ReadonlyArray<[string, string]> = [
-    ['university', 'Universities'],
-    ['cegep', 'CEGEPs / colleges'],
-    ['hospital', 'Hospitals'],
-    ['industrial', 'Industrial'],
-    ['park', 'Parks'],
-    ['other', 'Other'],
-];
+const QUEBEC_PLACE_TYPE_TABLE_ORDER = QUEBEC_PLACE_TYPE_LABELS;
 
 function QuebecPlaceTypeTable({
     rows,
@@ -299,14 +293,15 @@ function QuebecPlaceTypeTable({
     rows: QuebecPlaceTypeStat[] | undefined;
 }) {
     const byType = new Map((rows ?? []).map((r) => [r.place_type, r]));
-    const displayed = QUEBEC_PLACE_TYPE_LABELS.filter(([type]) => byType.has(type));
+    const displayed = QUEBEC_PLACE_TYPE_TABLE_ORDER.filter(([type]) => byType.has(type));
     return (
         <section className="measurement-stats__section">
             <h2 className="measurement-stats__h2">Quebec POIs by place type</h2>
             <p className="measurement-stats__section-note">
-                Quebec picks classified by OSM tags (university, CEGEP/college, hospital,
-                industrial), with the network walking distance from the aggregated centroid
-                to the entrance, one measurement per POI (
+                Quebec picks classified by reviewer-chosen place type or OSM tags
+                (universities, parks, shopping centres, schools, transit, etc.), with
+                the network walking distance from the aggregated centroid to the
+                entrance, one measurement per POI (
                 <code>to_nearest_main_entrance</code> preferred over{' '}
                 <code>to_nearest_entrance</code> when both exist, any centroid kind).
             </p>
