@@ -202,7 +202,8 @@ export type PoiRejectionReason = 'no_imagery' | 'obsolete' | 'other';
  *  `rejected_reason` is non-null iff `rejected` is `true`. */
 /** Place types the reviewer can assign to a pick. Mirrors
  *  `PLACE_TYPES` in `backend/src/place_types.rs`. */
-export { PLACE_TYPES, type PlaceType } from './keptBboxes/placeTypes';
+import { PLACE_TYPES, type PlaceType } from './keptBboxes/placeTypes';
+export { PLACE_TYPES, type PlaceType };
 
 export interface PoiPickRecord {
     bbox_id: string;
