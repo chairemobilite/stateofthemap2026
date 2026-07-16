@@ -255,11 +255,12 @@ describe('<MeasurementStatsPage />', () => {
     it('renders the centroid → main entrance distance histogram with dense bins', async () => {
         vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue({
             ...EMPTY_STATS,
-            // Sparse backend bins: 0–25 (70), 100–125 (8), 250+ (3).
+            // Sparse backend bins: 0–25 (70), 100–125 (8), 250–500 (3), 1000+ (2).
             centroid_to_main_entrance_histogram: [
                 { bin_start_m: 0, n: 70 },
                 { bin_start_m: 100, n: 8 },
                 { bin_start_m: 250, n: 3 },
+                { bin_start_m: 1000, n: 2 },
             ],
         });
         vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
@@ -279,14 +280,24 @@ describe('<MeasurementStatsPage />', () => {
         });
 
         const chart = screen.getByRole('img', { name: 'Centroid → main entrance' });
-        // All 11 bin labels present, including zero-count in-between bins.
-        for (const label of ['0–25', '25–50', '100–125', '225–250', '250+']) {
+        // All 14 bin labels present, including zero-count in-between bins.
+        for (const label of [
+            '0–25',
+            '25–50',
+            '100–125',
+            '225–250',
+            '250–500',
+            '500–750',
+            '750–1000',
+            '1000+',
+        ]) {
             expect(chart).toHaveTextContent(label);
         }
         expect(chart).toHaveTextContent('70');
         expect(chart).toHaveTextContent('8');
         expect(chart).toHaveTextContent('3');
-        expect(screen.getByText('81 measurement(s)')).toBeInTheDocument();
+        expect(chart).toHaveTextContent('2');
+        expect(screen.getByText('83 measurement(s)')).toBeInTheDocument();
     });
 
     it('shows the histogram empty state when there are no centroid measurements', async () => {

@@ -139,21 +139,33 @@ function StatPairTable({
     );
 }
 
-/** Bin width of the centroid → main entrance histogram (backend contract). */
+/** Width of the fine-grained bins below {@link HISTOGRAM_COARSE_START_M} (backend contract). */
 const HISTOGRAM_BIN_M = 25;
-/** Lower bound of the open-ended last bin ("250+"). */
-const HISTOGRAM_OVERFLOW_M = 250;
+/** Distance at which bins widen from {@link HISTOGRAM_BIN_M} to {@link HISTOGRAM_COARSE_BIN_M}. */
+const HISTOGRAM_COARSE_START_M = 250;
+/** Width of the coarser bins between {@link HISTOGRAM_COARSE_START_M} and {@link HISTOGRAM_OVERFLOW_M}. */
+const HISTOGRAM_COARSE_BIN_M = 250;
+/** Lower bound of the open-ended last bin ("1000+"). */
+const HISTOGRAM_OVERFLOW_M = 1000;
 
 /**
  * Fill the sparse backend histogram (empty bins omitted) into a dense,
- * contiguous 0…250+ bin list for display.
+ * contiguous bin list for display: fine bins up to
+ * {@link HISTOGRAM_COARSE_START_M}, coarser bins up to
+ * {@link HISTOGRAM_OVERFLOW_M}, then a single open-ended "1000+" bin.
  */
 function denseHistogramBins(rows: MeasurementHistogramBin[]): TufteHistogramBin[] {
     const byStart = new Map(rows.map((r) => [r.bin_start_m, r.n]));
     const bins: TufteHistogramBin[] = [];
-    for (let start = 0; start < HISTOGRAM_OVERFLOW_M; start += HISTOGRAM_BIN_M) {
+    for (let start = 0; start < HISTOGRAM_COARSE_START_M; start += HISTOGRAM_BIN_M) {
         bins.push({
             label: `${start}–${start + HISTOGRAM_BIN_M}`,
+            count: byStart.get(start) ?? 0,
+        });
+    }
+    for (let start = HISTOGRAM_COARSE_START_M; start < HISTOGRAM_OVERFLOW_M; start += HISTOGRAM_COARSE_BIN_M) {
+        bins.push({
+            label: `${start}–${start + HISTOGRAM_COARSE_BIN_M}`,
             count: byStart.get(start) ?? 0,
         });
     }
@@ -184,7 +196,8 @@ function CentroidDistanceHistogramSection({
                 centroid kind) to the entrance, one measurement per POI
                 (<code>to_nearest_main_entrance</code> preferred over{' '}
                 <code>to_nearest_entrance</code> when both exist), in{' '}
-                {HISTOGRAM_BIN_M} m bins; the last bin collects everything at{' '}
+                {HISTOGRAM_BIN_M} m bins up to {HISTOGRAM_COARSE_START_M} m, then{' '}
+                {HISTOGRAM_COARSE_BIN_M} m bins; the last bin collects everything at{' '}
                 {HISTOGRAM_OVERFLOW_M} m and more.
             </p>
             {total === 0 ? (

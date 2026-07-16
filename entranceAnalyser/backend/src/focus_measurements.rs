@@ -306,21 +306,34 @@ pub struct MeasurementDeltaAggregate {
 }
 
 /// One histogram bin of network walking distance. `bin_start_m` is the
-/// inclusive lower bound; every bin is
-/// [`CENTROID_HISTOGRAM_BIN_M`] wide except the last one
-/// (`bin_start_m == CENTROID_HISTOGRAM_OVERFLOW_M`), which is
-/// open-ended ("250 m and more").
+/// inclusive lower bound. Three tiers, from fine to coarse:
+/// * `[0, CENTROID_HISTOGRAM_COARSE_START_M)` — bins
+///   [`CENTROID_HISTOGRAM_BIN_M`] wide (e.g. "0–25");
+/// * `[CENTROID_HISTOGRAM_COARSE_START_M, CENTROID_HISTOGRAM_OVERFLOW_M)`
+///   — bins [`CENTROID_HISTOGRAM_COARSE_BIN_M`] wide (e.g. "250–500");
+/// * `bin_start_m == CENTROID_HISTOGRAM_OVERFLOW_M` — open-ended
+///   ("1000 m and more").
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementHistogramBin {
     pub bin_start_m: i64,
     pub n: i64,
 }
 
-/// Width of the centroid→main-entrance histogram bins, in metres.
+/// Width of the fine-grained histogram bins below
+/// [`CENTROID_HISTOGRAM_COARSE_START_M`], in metres.
 pub const CENTROID_HISTOGRAM_BIN_M: i64 = 25;
 
+/// Distance at which bins widen from [`CENTROID_HISTOGRAM_BIN_M`] to
+/// [`CENTROID_HISTOGRAM_COARSE_BIN_M`], in metres.
+pub const CENTROID_HISTOGRAM_COARSE_START_M: i64 = 250;
+
+/// Width of the coarse histogram bins between
+/// [`CENTROID_HISTOGRAM_COARSE_START_M`] and
+/// [`CENTROID_HISTOGRAM_OVERFLOW_M`], in metres.
+pub const CENTROID_HISTOGRAM_COARSE_BIN_M: i64 = 250;
+
 /// Lower bound of the open-ended last histogram bin, in metres.
-pub const CENTROID_HISTOGRAM_OVERFLOW_M: i64 = 250;
+pub const CENTROID_HISTOGRAM_OVERFLOW_M: i64 = 1000;
 
 /// All pairwise breakdowns exposed on `GET …/poi_focus_measurement_stats`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

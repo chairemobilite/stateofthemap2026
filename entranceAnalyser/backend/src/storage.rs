@@ -39,7 +39,8 @@ use crate::focus_measurements::{
     EntranceKind, MeasurementDeltaAggregate, MeasurementFourNumberStats,
     MeasurementHistogramBin, MeasurementPairAggregate, MeasurementPurpose,
     MeasurementStartOrigin, PoiFocusMeasurement, PoiFocusMeasurementStats,
-    QuebecPlaceTypeStat, CENTROID_HISTOGRAM_BIN_M, CENTROID_HISTOGRAM_OVERFLOW_M,
+    QuebecPlaceTypeStat, CENTROID_HISTOGRAM_BIN_M, CENTROID_HISTOGRAM_COARSE_BIN_M,
+    CENTROID_HISTOGRAM_COARSE_START_M, CENTROID_HISTOGRAM_OVERFLOW_M,
 };
 use crate::measurement_destination_warnings::{
     destination_warnings_by_bbox, main_vs_centroid_endpoint_agreement,
@@ -750,19 +751,29 @@ impl PgStore {
         pool: &PgPool,
         quebec_only: bool,
     ) -> Result<Vec<MeasurementHistogramBin>, sqlx::Error> {
+        // Three tiers: fine bins below the coarse threshold, coarse
+        // bins up to the overflow threshold, then a single open-ended
+        // bin — see the `MeasurementHistogramBin` doc comment.
         let rows: Vec<(i64, i64)> = sqlx::query_as(&format!(
             "WITH walks AS ({walks}) \
-             SELECT LEAST((FLOOR(w.length_m / $1::float8) * $1)::bigint, $2::bigint) \
-                        AS bin_start_m, \
+             SELECT CASE \
+                        WHEN w.length_m < $1::float8 \
+                          THEN (FLOOR(w.length_m / $2::float8) * $2)::bigint \
+                        WHEN w.length_m < $3::float8 \
+                          THEN ($1::float8 + FLOOR((w.length_m - $1::float8) / $4::float8) * $4)::bigint \
+                        ELSE $3::bigint \
+                    END AS bin_start_m, \
                     COUNT(*)::bigint AS n \
              FROM walks w \
-             WHERE $3 = {in_quebec} \
+             WHERE $5 = {in_quebec} \
              GROUP BY bin_start_m ORDER BY bin_start_m",
             walks = Self::CENTROID_ENTRANCE_WALKS_CTE,
             in_quebec = Self::bbox_in_quebec_sql("w.bbox_id"),
         ))
+        .bind(CENTROID_HISTOGRAM_COARSE_START_M)
         .bind(CENTROID_HISTOGRAM_BIN_M)
         .bind(CENTROID_HISTOGRAM_OVERFLOW_M)
+        .bind(CENTROID_HISTOGRAM_COARSE_BIN_M)
         .bind(quebec_only)
         .fetch_all(pool)
         .await?;
