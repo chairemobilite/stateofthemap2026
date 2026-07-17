@@ -23,6 +23,7 @@ import { SamplingPanel } from './SamplingPanel';
 import { submitDecision, type Bbox, type Decision } from './api';
 import { useAppConfig } from './useAppConfig';
 import { useSampling } from './useSampling';
+import { poiDisplayName } from './keptBboxes/poiDisplayName';
 import { DEFAULT_MEASUREMENT_DESTINATION_MATCH_RADIUS_M } from './keptBboxes/measurementDestinationWarnings';
 
 /** Fallback OSM editor URL used while the backend config is still
@@ -195,8 +196,8 @@ function App() {
                     onOpenPoiFocus={handleOpenFocus}
                     poiLabelForBbox={(bboxId) => {
                         const pick = poiPicks.picks[bboxId];
-                        const name = pick?.poi?.tags?.name;
-                        return name ? `${name} (${bboxId})` : bboxId;
+                        if (!pick?.poi) return bboxId;
+                        return `${poiDisplayName(pick.poi)} (${bboxId})`;
                     }}
                 />
             )}
@@ -208,6 +209,12 @@ function App() {
                     savingDecision={poiPicks.savingDecision}
                     onSetPickPlaceType={(id, placeType) => {
                         void poiPicks.setPickPlaceType(id, placeType);
+                    }}
+                    onSetPickName={(id, name) => {
+                        void poiPicks.setPickName(id, name);
+                    }}
+                    onRefreshMissingNames={async () => {
+                        await poiPicks.refreshMissingNames();
                     }}
                     onOpenPoiFocus={handleOpenFocus}
                     osmEditorUrlTemplate={
@@ -240,6 +247,9 @@ function App() {
                         }}
                         onSetPickPlaceType={(id, placeType) => {
                             void poiPicks.setPickPlaceType(id, placeType);
+                        }}
+                        onSetPickName={(id, name) => {
+                            void poiPicks.setPickName(id, name);
                         }}
                         onOpenFocus={handleOpenFocus}
                         openingFocus={poiFocus.loading}
@@ -286,6 +296,9 @@ function App() {
                         poiPickPlaceType={focusPick.place_type ?? null}
                         onSetPoiPickPlaceType={(placeType) => {
                             void poiPicks.setPickPlaceType(focusBbox.id, placeType);
+                        }}
+                        onSetPoiPickName={(name) => {
+                            void poiPicks.setPickName(focusBbox.id, name);
                         }}
                         focus={poiFocus.focuses[focusBbox.id]}
                         loading={poiFocus.loading.has(focusBbox.id)}

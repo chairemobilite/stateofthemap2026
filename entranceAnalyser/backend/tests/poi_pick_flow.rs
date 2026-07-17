@@ -620,6 +620,35 @@ async fn patch_place_type_sets_changes_and_clears() {
     db.cleanup().await.ok();
 }
 
+/// Setting and clearing the reviewer-facing POI name via `PATCH { poi_name }`.
+#[tokio::test]
+async fn patch_poi_name_sets_changes_and_clears() {
+    let Some((db, app, bbox_id, _overpass)) = setup_pending_picked().await else {
+        return;
+    };
+    let steps: &[(JsonValue, &str)] = &[
+        (json!({"poi_name": "UQTR | Drummondville"}), "UQTR | Drummondville"),
+        (json!({"poi_name": null}), ""),
+    ];
+    for (i, (body, expected)) in steps.iter().enumerate() {
+        let (st, resp) = patch_poi_pick_body(&app, bbox_id, body.clone()).await;
+        assert_eq!(st, StatusCode::OK, "step {i}: {resp}");
+        if expected.is_empty() {
+            assert!(
+                resp["poi"]["tags"]["name"].is_null(),
+                "step {i}: {resp}"
+            );
+        } else {
+            assert_eq!(
+                resp["poi"]["tags"]["name"].as_str(),
+                Some(*expected),
+                "step {i}"
+            );
+        }
+    }
+    db.cleanup().await.ok();
+}
+
 /// Each row exercises one illegal body shape and asserts the API
 /// returns 422 without mutating the row. Run against a freshly picked
 /// (pending) row so the only failure mode under test is the body
@@ -639,6 +668,7 @@ async fn patch_place_type_sets_changes_and_clears() {
 // place_type must be a known value and must come alone.
 #[case::unknown_place_type(json!({"place_type": "castle"}))]
 #[case::place_type_with_completed(json!({"place_type": "municipal_park", "completed": true}))]
+#[case::poi_name_with_completed(json!({"poi_name": "Campus", "completed": true}))]
 #[tokio::test]
 async fn invalid_decision_bodies_return_422(#[case] body: JsonValue) {
     let Some((db, app, bbox_id, _overpass)) = setup_pending_picked().await else {

@@ -341,6 +341,76 @@ impl PgStore {
         Ok(Some(payload))
     }
 
+    /// Set or clear the reviewer-facing `name` on a picked POI (`None`
+    /// removes `tags["name"]`). Returns `Ok(None)` when no row exists.
+    pub async fn set_poi_pick_name(
+        &self,
+        bbox_id: Uuid,
+        name: Option<String>,
+    ) -> Result<Option<PoiPickPayload>, sqlx::Error> {
+        let Some(mut payload) = self.read_poi_pick_payload(bbox_id).await? else {
+            return Ok(None);
+        };
+        let Some(ref mut poi) = payload.poi else {
+            return Ok(Some(payload));
+        };
+        match name {
+            None => {
+                poi.tags.remove("name");
+            }
+            Some(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    poi.tags.remove("name");
+                } else {
+                    poi.tags.insert("name".to_string(), trimmed.to_string());
+                }
+            }
+        }
+        self.write_poi_pick_payload(bbox_id, &payload).await?;
+        Ok(Some(payload))
+    }
+
+    /// Re-query public Overpass for picks missing a display name and
+    /// refresh `tags["name"]` as `name | branch` when applicable.
+    pub async fn refresh_missing_poi_names(
+        &self,
+        overpass: &crate::overpass::OverpassClient,
+    ) -> Result<Vec<(Uuid, String)>, sqlx::Error> {
+        use std::time::Duration;
+
+        use crate::poi_display_name::{format_poi_display_name, poi_needs_name_refresh, sync_poi_name_from_osm_tags};
+
+        let picks = self.read_all_poi_picks().await?;
+        let mut updated = Vec::new();
+        for (bbox_id, mut payload) in picks {
+            let Some(ref mut poi) = payload.poi else {
+                continue;
+            };
+            if !poi_needs_name_refresh(poi) {
+                continue;
+            }
+            let Ok((_, osm_tags)) = overpass
+                .fetch_osm_anchor_center(poi.osm_type, poi.osm_id)
+                .await
+            else {
+                tokio::time::sleep(Duration::from_millis(1_100)).await;
+                continue;
+            };
+            let before = poi.tags.get("name").cloned();
+            sync_poi_name_from_osm_tags(poi, &osm_tags);
+            let after = format_poi_display_name(&poi.tags);
+            if after != before {
+                self.write_poi_pick_payload(bbox_id, &payload).await?;
+                if let Some(name) = after {
+                    updated.push((bbox_id, name));
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(1_100)).await;
+        }
+        Ok(updated)
+    }
+
     /// Shared write path used by `set_poi_pick_completed` and
     /// `set_poi_pick_rejection`. Bumps `created_at` so the UI's
     /// "most-recent-first" ordering still reflects reviewer activity.

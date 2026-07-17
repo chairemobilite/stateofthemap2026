@@ -12,10 +12,10 @@ import { useMemo, useState } from 'react';
 import type { KeptBbox, PlaceType, PoiPickEntry } from './api';
 import { osmEditorUrlForPoi } from './keptBboxes/mapLinks';
 import { PlaceTypeSelect } from './keptBboxes/PlaceTypeSelect';
+import { PoiNameInput } from './keptBboxes/PoiNameInput';
 import {
     buildPoiListRows,
     filterPoiListRowsByScope,
-    poiDisplayName,
     type PoiListScope,
 } from './keptBboxes/poiListRows';
 import { StatusPill } from './keptBboxes/StatusPill';
@@ -26,6 +26,8 @@ export interface PoiListPageProps {
     /** Bbox ids with a PATCH /poi_pick in flight. */
     savingDecision: Set<string>;
     onSetPickPlaceType: (bboxId: string, placeType: PlaceType | null) => void;
+    onSetPickName: (bboxId: string, name: string | null) => void;
+    onRefreshMissingNames?: () => Promise<void>;
     /** Open the focus map for one kept bbox (wired from `App`). */
     onOpenPoiFocus?: (bboxId: string) => void;
     /** iD editor URL template from `GET /api/config`. */
@@ -45,12 +47,15 @@ export function PoiListPage({
     picks,
     savingDecision,
     onSetPickPlaceType,
+    onSetPickName,
+    onRefreshMissingNames,
     onOpenPoiFocus,
     osmEditorUrlTemplate,
     loading = false,
     error = null,
 }: PoiListPageProps) {
     const [scope, setScope] = useState<PoiListScope>('quebec');
+    const [refreshingNames, setRefreshingNames] = useState(false);
     const allRows = useMemo(() => buildPoiListRows(keptBboxes, picks), [keptBboxes, picks]);
     const rows = useMemo(() => filterPoiListRowsByScope(allRows, scope), [allRows, scope]);
     const quebecCount = useMemo(() => allRows.filter((r) => r.inQuebec).length, [allRows]);
@@ -62,9 +67,28 @@ export function PoiListPage({
                 <h1 className="measurement-stats-page__title">POI picks</h1>
                 <p className="measurement-stats-page__intro">
                     Started and completed POI picks across kept cells. Use the editor link to
-                    open iD on the feature, and set the place type when the autodetected category
+                    open iD on the feature, edit the name when OSM is still
+                    unnamed, and set the place type when the autodetected category
                     is wrong.
                 </p>
+                {onRefreshMissingNames && (
+                    <p className="poi-list-page__actions">
+                        <button
+                            type="button"
+                            disabled={refreshingNames || loading}
+                            onClick={() => {
+                                setRefreshingNames(true);
+                                void onRefreshMissingNames().finally(() =>
+                                    setRefreshingNames(false),
+                                );
+                            }}
+                        >
+                            {refreshingNames
+                                ? 'Refreshing names from OSM…'
+                                : 'Refresh missing names from OSM'}
+                        </button>
+                    </p>
+                )}
                 <nav className="poi-list-page__tabs" aria-label="Geographic scope">
                     <button
                         type="button"
@@ -115,9 +139,14 @@ export function PoiListPage({
                                         return (
                                             <tr key={bbox.id}>
                                                 <td>
-                                                    <span className="poi-list-page__name">
-                                                        {poiDisplayName(poi)}
-                                                    </span>
+                                                    <PoiNameInput
+                                                        poi={poi}
+                                                        disabled={saving}
+                                                        className="poi-list-page__name-input"
+                                                        onCommit={(name) =>
+                                                            onSetPickName(bbox.id, name)
+                                                        }
+                                                    />
                                                     <span className="poi-list-page__meta">
                                                         {poi.osm_type}/{poi.osm_id}
                                                     </span>

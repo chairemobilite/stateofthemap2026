@@ -61,6 +61,7 @@ import type {
     PoiRejectionReason,
 } from '../api';
 import { PlaceTypeSelect } from './PlaceTypeSelect';
+import { PoiNameInput } from './PoiNameInput';
 import { DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from '../basemaps';
 import { MapContextMenu, type MapContextMenuItem } from './MapContextMenu';
 import {
@@ -176,6 +177,7 @@ export interface PoiFocusMapProps {
     /** Reviewer-chosen place type stored on the pick (`null` = not set). */
     poiPickPlaceType?: PlaceType | null;
     onSetPoiPickPlaceType: (placeType: PlaceType | null) => void;
+    onSetPoiPickName: (name: string | null) => void;
 }
 
 /** Short labels for the reject-reason radio group + the "Rejected: …" badge. */
@@ -559,6 +561,7 @@ export function PoiFocusMap({
     onSetPoiPickUnrejected,
     poiPickPlaceType = null,
     onSetPoiPickPlaceType,
+    onSetPoiPickName,
 }: PoiFocusMapProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapLibreMap | null>(null);
@@ -1226,8 +1229,12 @@ export function PoiFocusMap({
                 </button>
                 <div className="poi-focus-map__title">
                     <strong>Focus:</strong>{' '}
-                    {pickedPoi.tags['name'] ??
-                        `${pickedPoi.osm_type} ${pickedPoi.osm_id}`}{' '}
+                    <PoiNameInput
+                        poi={pickedPoi}
+                        disabled={poiPickDecisionSaving}
+                        className="poi-focus-map__name-input"
+                        onCommit={onSetPoiPickName}
+                    />{' '}
                     <span className="poi-focus-map__group">({pickedPoi.group})</span>
                 </div>
                 {focus && (

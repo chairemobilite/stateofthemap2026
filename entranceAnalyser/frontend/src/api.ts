@@ -235,7 +235,8 @@ export type PoiPickDecision =
     | { kind: 'completed'; value: boolean }
     | { kind: 'rejected'; reason: PoiRejectionReason }
     | { kind: 'unreject' }
-    | { kind: 'place_type'; value: PlaceType | null };
+    | { kind: 'place_type'; value: PlaceType | null }
+    | { kind: 'poi_name'; value: string | null };
 
 const ANALYSES_BASE = '/api/analyses';
 
@@ -286,6 +287,7 @@ export function decisionToBody(decision: PoiPickDecision): {
     rejected?: boolean;
     rejected_reason?: PoiRejectionReason;
     place_type?: PlaceType | null;
+    poi_name?: string | null;
 } {
     switch (decision.kind) {
         case 'completed':
@@ -296,6 +298,8 @@ export function decisionToBody(decision: PoiPickDecision): {
             return { rejected: false };
         case 'place_type':
             return { place_type: decision.value };
+        case 'poi_name':
+            return { poi_name: decision.value };
     }
 }
 
@@ -308,6 +312,25 @@ export async function fetchPoiPicks(
         await fetchFn(`${ANALYSES_BASE}/poi_picks`),
     );
     return picks;
+}
+
+export interface RefreshedPoiName {
+    bbox_id: string;
+    name: string;
+}
+
+export interface RefreshPoiNamesResponse {
+    updated: RefreshedPoiName[];
+}
+
+/** `POST /api/analyses/poi_picks/refresh_names` — re-query public Overpass
+ *  for picks missing a display name and store `name | branch` when set. */
+export async function refreshPoiNames(
+    fetchFn: typeof fetch = fetch,
+): Promise<RefreshPoiNamesResponse> {
+    return jsonOrThrow<RefreshPoiNamesResponse>(
+        await fetchFn(`${ANALYSES_BASE}/poi_picks/refresh_names`, { method: 'POST' }),
+    );
 }
 
 // -------- POI focus map (PR9) ------------------------------------------------

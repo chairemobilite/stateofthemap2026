@@ -28,6 +28,7 @@
 
 import type { PlaceType, Poi } from '../api';
 import { PlaceTypeSelect } from './PlaceTypeSelect';
+import { PoiNameInput } from './PoiNameInput';
 
 export interface PoiPickPanelProps {
     bboxId: string;
@@ -49,6 +50,8 @@ export interface PoiPickPanelProps {
     /** Set or clear the place type; the dropdown is only rendered
      *  when the handler is provided and a real POI exists. */
     onSetPickPlaceType?: (bboxId: string, placeType: PlaceType | null) => void;
+    /** Set or clear the reviewer-facing POI name. */
+    onSetPickName?: (bboxId: string, name: string | null) => void;
     /** Optional handler that opens the POI focus map. The button is
      *  rendered (and enabled) only when a real POI was picked, since
      *  the focus query is anchored on the pick's centre coords.
@@ -58,12 +61,6 @@ export interface PoiPickPanelProps {
     /** True while this bbox's focus load is in flight, so the button
      *  can flip to "Loading…" without leaving the popup. */
     isOpeningFocus?: boolean;
-}
-
-/** Minimal fallback when `tags.name` is missing — keeps the panel
- *  readable for unnamed features without burying the OSM id. */
-function displayName(poi: Poi): string {
-    return poi.tags['name'] ?? `${poi.osm_type} ${poi.osm_id}`;
 }
 
 /** Single tag highlight: prefer the group's defining key
@@ -93,6 +90,7 @@ export function PoiPickPanel({
     onSetPickCompleted,
     pickPlaceType = null,
     onSetPickPlaceType,
+    onSetPickName,
     onOpenFocus,
     isOpeningFocus = false,
 }: PoiPickPanelProps) {
@@ -128,8 +126,18 @@ export function PoiPickPanel({
     return (
         <div className="poi-pick-panel">
             <dl className="poi-pick-panel__details">
-                <dt>Picked POI</dt>
-                <dd>{displayName(pickedPoi)}</dd>
+                <dt>Name</dt>
+                <dd>
+                    {onSetPickName ? (
+                        <PoiNameInput
+                            poi={pickedPoi}
+                            disabled={isSavingPickDecision}
+                            onCommit={(name) => onSetPickName(bboxId, name)}
+                        />
+                    ) : (
+                        pickedPoi.tags['name'] ?? `${pickedPoi.osm_type} ${pickedPoi.osm_id}`
+                    )}
+                </dd>
                 <dt>Group</dt>
                 <dd>{pickedPoi.group}</dd>
                 {tag && (

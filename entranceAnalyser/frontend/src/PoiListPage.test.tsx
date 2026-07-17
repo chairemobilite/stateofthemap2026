@@ -57,14 +57,15 @@ describe('<PoiListPage />', () => {
         },
         savingDecision: new Set<string>(),
         onSetPickPlaceType: vi.fn(),
+        onSetPickName: vi.fn(),
         onOpenPoiFocus: vi.fn(),
         osmEditorUrlTemplate: 'https://example.org/id/#map={zoom}/{lat}/{lon}',
     };
 
     it('defaults to Quebec scope and lists only Quebec POIs', () => {
         render(<PoiListPage {...baseProps} />);
-        expect(screen.getByText('UQAM')).toBeInTheDocument();
-        expect(screen.queryByText('Toronto Mall')).not.toBeInTheDocument();
+        expect(screen.getByDisplayValue('UQAM')).toBeInTheDocument();
+        expect(screen.queryByDisplayValue('Toronto Mall')).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: /Québec \(1\)/ })).toHaveAttribute(
             'aria-pressed',
             'true',
@@ -74,13 +75,14 @@ describe('<PoiListPage />', () => {
     it('switches to world scope', () => {
         render(<PoiListPage {...baseProps} />);
         fireEvent.click(screen.getByRole('button', { name: /World \(1\)/ }));
-        expect(screen.getByText('Toronto Mall')).toBeInTheDocument();
-        expect(screen.queryByText('UQAM')).not.toBeInTheDocument();
+        expect(screen.getByDisplayValue('Toronto Mall')).toBeInTheDocument();
+        expect(screen.queryByDisplayValue('UQAM')).not.toBeInTheDocument();
     });
 
     it('shows status pills and iD edit links', () => {
         render(<PoiListPage {...baseProps} />);
         expect(screen.getByText('Started')).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'POI name' })).toBeInTheDocument();
         const link = screen.getByRole('link', { name: 'Open in iD' });
         expect(link).toHaveAttribute(
             'href',

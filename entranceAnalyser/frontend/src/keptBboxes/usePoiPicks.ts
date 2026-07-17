@@ -22,11 +22,13 @@ import {
     fetchPoiPicks,
     patchPoiPickDecision,
     pickPoi,
+    refreshPoiNames,
     type PlaceType,
     type PoiPickDecision,
     type PoiPickEntry,
     type PoiPickRecord,
     type PoiRejectionReason,
+    type RefreshPoiNamesResponse,
 } from '../api';
 
 /** Same lifecycle as `useKeptBboxes` for visual consistency. */
@@ -39,6 +41,8 @@ export interface UsePoiPicksOptions {
     pickOne?: (bboxId: string) => Promise<PoiPickRecord>;
     /** Override for the PATCH /poi_pick decision action, mostly for tests. */
     patchDecision?: (bboxId: string, decision: PoiPickDecision) => Promise<PoiPickRecord>;
+    /** Override for the refresh-names action, mostly for tests. */
+    refreshNames?: () => Promise<RefreshPoiNamesResponse>;
 }
 
 function recordToEntry(row: PoiPickRecord): PoiPickEntry {
@@ -76,6 +80,10 @@ export interface PoiPicksState {
     setPickUnrejected: (bboxId: string) => Promise<void>;
     /** Set (or clear with `null`) the reviewer-chosen place type. */
     setPickPlaceType: (bboxId: string, placeType: PlaceType | null) => Promise<void>;
+    /** Set (or clear with `null`) the reviewer-facing POI name. */
+    setPickName: (bboxId: string, name: string | null) => Promise<void>;
+    /** Re-query public Overpass for picks still missing a display name. */
+    refreshMissingNames: () => Promise<RefreshPoiNamesResponse>;
     /** Drop local pick state after the bbox was removed from `kept_bboxes`. */
     removePickForBbox: (bboxId: string) => void;
     reload: () => Promise<void>;
@@ -103,6 +111,10 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
             ((bboxId: string, decision: PoiPickDecision) =>
                 patchPoiPickDecision(bboxId, decision)),
         [options.patchDecision],
+    );
+    const refreshAll = useMemo(
+        () => options.refreshNames ?? (() => refreshPoiNames()),
+        [options.refreshNames],
     );
 
     const [picks, setPicks] = useState<Record<string, PoiPickEntry>>({});
@@ -218,6 +230,24 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
         [runDecision],
     );
 
+    const setPickName = useCallback(
+        (bboxId: string, name: string | null) =>
+            runDecision(bboxId, { kind: 'poi_name', value: name }),
+        [runDecision],
+    );
+
+    const refreshMissingNames = useCallback(async () => {
+        setError(null);
+        try {
+            const result = await refreshAll();
+            await reload();
+            return result;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            throw err;
+        }
+    }, [refreshAll, reload]);
+
     return {
         picks,
         picking,
@@ -229,6 +259,8 @@ export function usePoiPicks(options: UsePoiPicksOptions = {}): PoiPicksState {
         setPickRejected,
         setPickUnrejected,
         setPickPlaceType,
+        setPickName,
+        refreshMissingNames,
         removePickForBbox,
         reload,
     };
