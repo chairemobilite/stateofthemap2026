@@ -37,6 +37,7 @@ export interface KeptBboxPopupProps {
     pickPlaceType?: PlaceType | null;
     /** Set or clear the pick's place type; omitting hides the dropdown. */
     onSetPickPlaceType?: (bboxId: string, placeType: PlaceType | null) => void;
+    onSetPickName?: (bboxId: string, name: string | null) => void;
     /** Optional: opens the POI focus map for this bbox. Forwarded to
      *  `<PoiPickPanel />` so the focus button only renders once a
      *  real POI has been picked. */
@@ -72,6 +73,7 @@ export function KeptBboxPopup({
     onSetPickCompleted,
     pickPlaceType = null,
     onSetPickPlaceType,
+    onSetPickName,
     onOpenFocus,
     isOpeningFocus = false,
     onRemoveFromKept,
@@ -93,6 +95,7 @@ export function KeptBboxPopup({
                 onSetPickCompleted={onSetPickCompleted}
                 pickPlaceType={pickPlaceType}
                 onSetPickPlaceType={onSetPickPlaceType}
+                onSetPickName={onSetPickName}
                 onOpenFocus={onOpenFocus}
                 isOpeningFocus={isOpeningFocus}
             />

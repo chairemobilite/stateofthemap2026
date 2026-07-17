@@ -398,9 +398,42 @@ body {
     max-width: 14rem;
 }
 
-.poi-list-page__name {
+.poi-list-page__name-input {
     display: block;
+    width: 100%;
+    min-width: 12rem;
+    max-width: 22rem;
+    font: inherit;
     font-weight: 600;
+}
+
+.poi-list-page__actions {
+    margin-top: 0.5rem;
+}
+
+.poi-list-page__actions button {
+    font: inherit;
+    cursor: pointer;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 0.3rem 0.65rem;
+    background: #fff;
+}
+
+.poi-name-input,
+.poi-focus-map__name-input {
+    font: inherit;
+    min-width: 10rem;
+    max-width: 24rem;
+}
+
+.poi-focus-map__name-input {
+    font-weight: 600;
+}
+
+.poi-pick-panel .poi-name-input {
+    width: 100%;
+    max-width: 18rem;
 }
 
 .poi-list-page__meta {

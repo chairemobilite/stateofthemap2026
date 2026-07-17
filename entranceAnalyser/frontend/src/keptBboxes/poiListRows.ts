@@ -9,10 +9,13 @@
 //! filter by Quebec/world scope, and derive display fields.
 
 import type { KeptBbox, Poi, PoiPickEntry } from '../api';
+import { poiDisplayName } from './poiDisplayName';
 import { progressFromPoiPick, type ProgressStatus } from './progress';
 import { isPointInQuebec } from './quebecBounds';
 
 export type PoiListScope = 'world' | 'quebec';
+
+export { poiDisplayName } from './poiDisplayName';
 
 /** One started or completed POI row for the list table. */
 export interface PoiListRow {
@@ -21,11 +24,6 @@ export interface PoiListRow {
     pick: PoiPickEntry;
     status: ProgressStatus;
     inQuebec: boolean;
-}
-
-/** Human-readable POI title for table cells. */
-export function poiDisplayName(poi: Poi): string {
-    return poi.tags['name'] ?? `${poi.osm_type} ${poi.osm_id}`;
 }
 
 /** True when the pick has a real POI and is started or completed. */

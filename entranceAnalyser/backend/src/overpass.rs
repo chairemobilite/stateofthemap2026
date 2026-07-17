@@ -329,13 +329,16 @@ impl RawElement {
         let osm_type = OsmType::from_overpass(&self.osm_type)?;
         let group = config.group_for_tags(&self.tags)?.to_string();
         let center = self.center_lon_lat()?;
-        Some(Poi {
+        let tags = self.tags;
+        let mut poi = Poi {
             osm_type,
             osm_id: self.id,
             center,
-            tags: self.tags,
+            tags,
             group,
-        })
+        };
+        crate::poi_display_name::apply_display_name_to_poi(&mut poi);
+        Some(poi)
     }
 }
 

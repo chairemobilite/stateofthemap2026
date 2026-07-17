@@ -66,6 +66,7 @@ export interface KeptBboxesMapProps {
     onSetPickCompleted: (bboxId: string, completed: boolean) => void;
     /** Set or clear the reviewer-chosen place type of a pick. */
     onSetPickPlaceType: (bboxId: string, placeType: PlaceType | null) => void;
+    onSetPickName: (bboxId: string, name: string | null) => void;
     /** Triggered by the "Open focus map" button inside the popup.
      *  Optional: when omitted, the popup hides the button entirely. */
     onOpenFocus?: (bboxId: string) => void;
@@ -188,6 +189,7 @@ export function KeptBboxesMap({
     onPickPoi,
     onSetPickCompleted,
     onSetPickPlaceType,
+    onSetPickName,
     onOpenFocus,
     openingFocus = EMPTY_OPENING_FOCUS,
     onRemoveFromKept,
@@ -204,6 +206,7 @@ export function KeptBboxesMap({
     const onPickPoiRef = useRef(onPickPoi);
     const onSetPickCompletedRef = useRef(onSetPickCompleted);
     const onSetPickPlaceTypeRef = useRef(onSetPickPlaceType);
+    const onSetPickNameRef = useRef(onSetPickName);
     const onOpenFocusRef = useRef(onOpenFocus);
     const openingFocusRef = useRef(openingFocus);
     const savingDecisionRef = useRef(savingPickDecision);
@@ -227,6 +230,9 @@ export function KeptBboxesMap({
     });
     useEffect(() => {
         onSetPickPlaceTypeRef.current = onSetPickPlaceType;
+    });
+    useEffect(() => {
+        onSetPickNameRef.current = onSetPickName;
     });
     useEffect(() => {
         onOpenFocusRef.current = onOpenFocus;
@@ -286,6 +292,7 @@ export function KeptBboxesMap({
                 onSetPickPlaceType={(id, placeType) =>
                     void onSetPickPlaceTypeRef.current(id, placeType)
                 }
+                onSetPickName={(id, name) => void onSetPickNameRef.current(id, name)}
                 onOpenFocus={handleOpenFocus}
                 isOpeningFocus={openingFocusRef.current.has(bbox.id)}
                 onRemoveFromKept={(id) => onRemoveFromKeptRef.current(id)}

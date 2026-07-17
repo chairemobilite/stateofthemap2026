@@ -134,6 +134,10 @@ pub fn router(state: AppState) -> Router {
             post(poi_pick_handler).patch(patch_poi_pick_handler),
         )
         .route("/api/analyses/poi_picks", get(poi_picks_handler))
+        .route(
+            "/api/analyses/poi_picks/refresh_names",
+            post(refresh_poi_names_handler),
+        )
         .route("/api/bbox/kept/:id/poi_focus", post(poi_focus_handler))
         .route(
             "/api/bbox/kept/:id/poi_focus_measurements",
@@ -370,6 +374,7 @@ async fn decision_handler(
                                     poi.group = group.to_string();
                                 }
                                 poi.tags = tags;
+                                crate::poi_display_name::apply_display_name_to_poi(&mut poi);
                             }
                             Err(err) => eprintln!(
                                 "warning: keeping custom OSM pick without tags (overpass: {err})"
@@ -462,6 +467,10 @@ pub struct PatchPoiPickBody {
     /// "field absent" deserialize differently.
     #[serde(default, deserialize_with = "double_option")]
     pub place_type: Option<Option<String>>,
+    /// Reviewer-facing POI label stored in `poi.tags["name"]`.
+    /// `Some(Some(v))` sets it, `Some(None)` clears it.
+    #[serde(default, deserialize_with = "double_option")]
+    pub poi_name: Option<Option<String>>,
 }
 
 /// Deserialize a JSON field so that "absent" → `None` (via
@@ -486,6 +495,8 @@ enum PoiPickDecision {
     Unreject,
     /// Set (`Some`) or clear (`None`) the reviewer-chosen place type.
     SetPlaceType(Option<String>),
+    /// Set (`Some`) or clear (`None`) the reviewer-facing POI name.
+    SetPoiName(Option<String>),
 }
 
 impl PatchPoiPickBody {
@@ -496,7 +507,7 @@ impl PatchPoiPickBody {
         // `place_type` is its own single-field decision, exclusive of
         // the reviewer-state fields.
         if let Some(place_type) = &self.place_type {
-            if self.completed.is_some() || self.rejected.is_some() {
+            if self.completed.is_some() || self.rejected.is_some() || self.poi_name.is_some() {
                 return Err("`place_type` cannot be combined with other fields");
             }
             if let Some(v) = place_type {
@@ -505,6 +516,12 @@ impl PatchPoiPickBody {
                 }
             }
             return Ok(PoiPickDecision::SetPlaceType(place_type.clone()));
+        }
+        if let Some(poi_name) = &self.poi_name {
+            if self.completed.is_some() || self.rejected.is_some() {
+                return Err("`poi_name` cannot be combined with other fields");
+            }
+            return Ok(PoiPickDecision::SetPoiName(poi_name.clone()));
         }
         // The order of these arms matters: each accepted shape is
         // matched exactly first, then the more permissive 422 patterns
@@ -520,7 +537,7 @@ impl PatchPoiPickBody {
             }
             (_, _, Some(_)) => Err("`rejected_reason` is only valid with `rejected: true`"),
             (None, None, None) => Err(
-                "body must set one of `completed`, `rejected: true` (with `rejected_reason`), `rejected: false`, or `place_type`",
+                "body must set one of `completed`, `rejected: true` (with `rejected_reason`), `rejected: false`, `place_type`, or `poi_name`",
             ),
         }
     }
@@ -615,6 +632,7 @@ async fn patch_poi_pick_handler(
         PoiPickDecision::Completed(true)
             | PoiPickDecision::Reject(_)
             | PoiPickDecision::SetPlaceType(Some(_))
+            | PoiPickDecision::SetPoiName(_)
     );
     if needs_picked_poi && current.poi.is_none() {
         return Err((
@@ -645,6 +663,11 @@ async fn patch_poi_pick_handler(
             .set_poi_pick_place_type(bbox_id, place_type)
             .await
             .map_err(internal)?,
+        PoiPickDecision::SetPoiName(name) => state
+            .store
+            .set_poi_pick_name(bbox_id, name)
+            .await
+            .map_err(internal)?,
     };
     // The pre-flight read already proved the row exists; an Ok(None)
     // here would only happen on a concurrent delete, which we surface
@@ -666,6 +689,41 @@ async fn patch_poi_pick_handler(
 #[derive(Debug, Serialize)]
 pub struct PoiPicksResponse {
     pub picks: Vec<PoiPickResponse>,
+}
+
+/// Public Overpass mirror for name refresh — fresher than our
+/// transition.city instance which syncs every few days.
+const PUBLIC_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
+
+#[derive(Debug, Serialize)]
+pub struct RefreshedPoiName {
+    pub bbox_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshPoiNamesResponse {
+    pub updated: Vec<RefreshedPoiName>,
+}
+
+/// `POST /api/analyses/poi_picks/refresh_names` — re-query public
+/// Overpass for picks still showing their osm id as the label, and
+/// store `name | branch` in `poi.tags["name"]` when OSM provides them.
+async fn refresh_poi_names_handler(
+    State(state): State<AppState>,
+) -> Result<Json<RefreshPoiNamesResponse>, ApiError> {
+    let public = crate::overpass::OverpassClient::new(PUBLIC_OVERPASS_URL);
+    let rows = state
+        .store
+        .refresh_missing_poi_names(&public)
+        .await
+        .map_err(internal)?;
+    Ok(Json(RefreshPoiNamesResponse {
+        updated: rows
+            .into_iter()
+            .map(|(bbox_id, name)| RefreshedPoiName { bbox_id, name })
+            .collect(),
+    }))
 }
 
 async fn poi_picks_handler(
