@@ -18,6 +18,13 @@
 
 import type { StyleSpecification } from 'maplibre-gl';
 
+/**
+ * Origin-relative OSM raster tile template. Vite proxies `/tiles/osm/*` to
+ * `tile.openstreetmap.org` in dev/preview (`vite.config.ts`) so MapLibre can
+ * load tiles without cross-origin restrictions on localhost.
+ */
+export const OSM_TILE_URL = '/tiles/osm/{z}/{x}/{y}.png';
+
 export type BasemapId = 'osm' | 'esri-imagery';
 
 export interface Basemap {
@@ -68,7 +75,7 @@ export const BASEMAPS: Basemap[] = [
         label: 'OSM',
         style: rasterStyle(
             'osm',
-            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            OSM_TILE_URL,
             '© OpenStreetMap contributors',
             19,
         ),
