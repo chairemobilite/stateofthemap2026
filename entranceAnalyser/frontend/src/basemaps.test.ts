@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import type { RasterSourceSpecification } from 'maplibre-gl';
 
-import { BASEMAPS, DEFAULT_BASEMAP_ID, findBasemap, type BasemapId } from './basemaps';
+import { BASEMAPS, DEFAULT_BASEMAP_ID, findBasemap, OSM_TILE_URL, type BasemapId } from './basemaps';
 
 describe('BASEMAPS catalogue', () => {
     it('ships the expected ids in a deterministic order', () => {
@@ -20,7 +20,7 @@ describe('BASEMAPS catalogue', () => {
     });
 
     it.each<[BasemapId, string]>([
-        ['osm', 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        ['osm', OSM_TILE_URL],
         ['esri-imagery', 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
     ])('exposes %s as a style-v8 raster source with the expected tile URL', (id, expectedTile) => {
         const basemap = findBasemap(id);
