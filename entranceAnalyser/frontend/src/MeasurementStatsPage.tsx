@@ -629,7 +629,16 @@ export function MeasurementStatsPage({
     return (
         <div className="measurement-stats-page">
             <header className="measurement-stats-page__header">
-                <h1 className="measurement-stats-page__title">Measurement statistics</h1>
+                <div className="measurement-stats-page__header-row">
+                    <h1 className="measurement-stats-page__title">Measurement statistics</h1>
+                    <a
+                        className="measurement-stats-page__csv-link"
+                        href="/api/analyses/poi_measurements.csv"
+                        download="poi_measurements.csv"
+                    >
+                        Download POI measurements (CSV)
+                    </a>
+                </div>
                 <p className="measurement-stats-page__intro">
                     Aggregates over all saved focus-map polylines. Length is geodesic path length in
                     metres; duration is <code>(length_m / 1000) / (walking_speed_kmh / 3600)</code>{' '}

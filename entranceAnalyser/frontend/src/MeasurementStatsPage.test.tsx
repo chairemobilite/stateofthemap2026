@@ -408,4 +408,21 @@ describe('<MeasurementStatsPage />', () => {
             ).toBeInTheDocument();
         });
     });
+
+    it('links to the per-POI measurements CSV export', async () => {
+        vi.mocked(fetchPoiFocusMeasurementStats).mockResolvedValue(EMPTY_STATS);
+        vi.mocked(fetchPoiPickCountryStats).mockResolvedValue(EMPTY_COUNTRY_STATS);
+        vi.mocked(fetchPoiFocusMeasurementDestinationWarnings).mockResolvedValue({ warnings: [] });
+        vi.mocked(fetchAppConfig).mockResolvedValue({
+            osm_editor_url: 'https://example.org/edit',
+            poi_focus_radius_m: 150,
+            measurement_destination_match_radius_m: 10,
+        });
+
+        render(<MeasurementStatsPage />);
+
+        const link = await screen.findByRole('link', { name: /download poi measurements/i });
+        expect(link).toHaveAttribute('href', '/api/analyses/poi_measurements.csv');
+        expect(link).toHaveAttribute('download', 'poi_measurements.csv');
+    });
 });
