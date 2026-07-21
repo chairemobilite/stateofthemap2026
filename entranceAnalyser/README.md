@@ -33,6 +33,7 @@ backend/   Rust (axum) + sqlx — Postgres/PostGIS persistence
            src/measurement_destination_warnings.rs   per-POI destination mismatch detection (Haversine)
            src/bin/migrate.rs                      `entrance-analyser-migrate` — apply SQL migrations
 queries/   Ad-hoc SQL exports (e.g. measurement endpoints per POI)
+pois_data.csv   committed per-POI measurement snapshot (see [Paper dataset](#paper-dataset-pois_datacsv))
 config/    Runtime config consumed by the analysis pipeline
            poi_tags.yml                            POI tag groups + exceptions
 frontend/  React + Vite + MapLibre GL — four screens:
@@ -73,6 +74,7 @@ The HTTP backend serves these endpoints:
 | DELETE | `/api/bbox/kept/:id/poi_focus_measurements/:measure_id` | delete one measurement row                             |
 | GET    | `/api/analyses/poi_focus_measurement_stats` | min/max/avg/median length and walking duration by attribute pairs |
 | GET    | `/api/analyses/poi_focus_measurement_destination_warnings` | per-POI warnings when the same destination type lands on different endpoints across entrance anchors |
+| GET    | `/api/analyses/poi_measurements.csv`        | per-POI measurement export (CSV attachment; same schema as [`pois_data.csv`](pois_data.csv)) |
 | GET    | `/api/config`                               | runtime config (OSM editor URL, focus radius, destination-match radius, …) |
 
 ### Sampling strategies
@@ -257,7 +259,7 @@ kept bbox that already has a picked POI:
 | `Sampling`     | Draw a candidate bbox, keep or reject it, and watch it land on the MapLibre map.                                    |
 | `Kept bboxes`  | World-overview map of every row in `kept_bboxes`: circle markers below zoom 6, filled rectangles above, popup on click. The popup hosts a **Pick POI** button that runs the Overpass picker on demand; picked POIs paint as **orange** until you check **Mark POI completed**, then **green** (same flag in the focus map header). |
 | `Focus`        | Zoom-in map anchored on one picked POI: building polygons, entrance markers, and a dashed buffer ring at the server-config radius. Reached via the **Open focus map** button in the popup; **Back** returns to the overview. **Remove from kept…** runs the same `DELETE` as the overview popup (confirms first). |
-| `Stats`        | Tables of global measurement aggregates (length and walking duration by purpose, entrance type, and start origin), a POIs-per-country table (with a Quebec subset), plus instructions below for exporting destination-mismatch warnings across all POIs. |
+| `Stats`        | Tables of global measurement aggregates (length and walking duration by purpose, entrance type, and start origin), a POIs-per-country table (with a Quebec subset), destination-mismatch warnings across all POIs, and a **Download POI measurements (CSV)** link (live export; same schema as [`pois_data.csv`](pois_data.csv)). |
 
 The `Kept bboxes` map uses a single GeoJSON source per geometry type
 (polygons for the rectangles, points for the low-zoom markers) so the
@@ -594,7 +596,51 @@ comes from the workspace `.env` (`PG_CONNECTION_STRING_PREFIX` +
 `PG_DATABASE`); `--database-url`, `--admin0-file` and `--quebec-file`
 override the target and the inputs.
 
-**1. China datum offset.** Chinese law requires consumer maps to
+## Paper dataset (`pois_data.csv`)
+
+Committed snapshot of the per-POI measurement table used for the OSM
+Science 2026 analysis. One row per kept bbox with a completed reviewer
+pick and focus-map measurements — **216 POIs** in the current file
+(**116** outside Quebec, **100** in Quebec). Quebec rows carry a
+reviewer/OSM **place type** in `category` (`university`, `hospital`,
+`airport`, …); world rows leave `category` empty.
+
+| Column | Meaning |
+|--------|---------|
+| `osm_id` | Picked feature as `node/…` or `way/…` |
+| `name` | Display name when set on the pick (`name \| branch` formatting) |
+| `centroid_base` | Aggregated centroid kind (`building`, `area`, …) |
+| `centroid_lat`, `centroid_lon` | Inferred centroid anchor (WGS84) |
+| `main_entrance_lat`, `main_entrance_lon` | Inferred main-entrance anchor (WGS84) |
+| `category` | Quebec place type when `cohort=quebec`, else empty |
+| `cohort` | `quebec` or `world` (Quebec = bbox centre inside `admin_boundaries` `CA-QC`) |
+| `walking_distance_centroid_to_main_entrance_m` | Network walk from centroid anchor to main entrance (`to_nearest_entrance` / `to_nearest_main_entrance` drawn from a `centroid_*` entrance type) |
+| `walking_distance_centroid_to_nearest_driving_road_m` | Centroid-anchored walk to nearest driving road (falls back through retired combo measurement types) |
+| `walking_distance_centroid_to_nearest_transit_stop_m` | Centroid-anchored walk to nearest transit stop |
+| `walking_distance_main_entrance_to_nearest_driving_road_m` | Main-entrance-anchored walk to nearest driving road |
+| `walking_distance_main_entrance_to_nearest_transit_stop_m` | Main-entrance-anchored walk to nearest transit stop |
+| `is_same_nearest_driving_road` | `TRUE` when both anchors' driving-road walks end within the destination-match radius |
+| `is_same_transit_stop` | Same for transit stops |
+| `euclidean_distance_centroid_to_main_entrance_m` | Haversine distance between the two inferred anchors |
+| `absolute_difference_nearest_road_distance_m` | \|centroid road walk − main road walk\| |
+| `absolute_difference_nearest_transit_stop_distance_m` | \|centroid transit walk − main transit walk\| |
+
+Empty cells mean that measurement was not drawn (or could not be
+inferred — for example a centroid→entrance walk tagged with entrance
+type `main` instead of `centroid_*`).
+
+**Regenerating.** With a populated Postgres database and the backend
+running, download a fresh export from the **Stats** tab or:
+
+```bash
+curl -fsS -o pois_data.csv http://127.0.0.1:3000/api/analyses/poi_measurements.csv
+```
+
+The live route may include extra columns (for example
+`reversed_measurements` when anchor inference had to swap polyline
+ends). Commit an updated [`pois_data.csv`](pois_data.csv) when the
+paper should pin a new measurement pass.
+
 **1. Pano-viewer deeplinks: GSV is the exception, not the rule.**
 Only Google Street View can be deeplinked straight into pano mode
 from a bare lat/lon: `map_action=pano&viewpoint={lat},{lng}` makes
