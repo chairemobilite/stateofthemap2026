@@ -24,7 +24,7 @@
 //!     `write_poi_focus`) — caches the buildings + entrances around the
 //!     picked POI.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
@@ -676,6 +676,32 @@ impl PgStore {
         })
     }
 
+    /// Quebec picked POIs with their classified place type (reviewer
+    /// choice or OSM tag fallback).
+    async fn quebec_classified_picks(pool: &PgPool) -> Result<Vec<(Uuid, String)>, sqlx::Error> {
+        sqlx::query_as(&format!(
+            "WITH quebec_picks AS ( \
+                 SELECT a.bbox_id, a.payload->'poi'->'tags' AS tags, \
+                        a.payload->>'place_type' AS chosen \
+                 FROM analyses a \
+                 JOIN kept_bboxes k ON k.id = a.bbox_id \
+                 WHERE a.kind = $1 AND jsonb_typeof(a.payload->'poi') = 'object' \
+                   AND EXISTS (SELECT 1 FROM admin_boundaries q \
+                               WHERE q.level = 'region' AND q.iso_code = 'CA-QC' \
+                                 AND ST_Contains(q.geom, ST_SetSRID( \
+                                     ST_MakePoint(k.center_lon, k.center_lat), 4326))) \
+             ) \
+             SELECT bbox_id, COALESCE( \
+                 CASE WHEN chosen = 'park' THEN 'municipal_park' ELSE chosen END, \
+                 CASE {tag_fallback} END) AS place_type \
+             FROM quebec_picks",
+            tag_fallback = crate::place_types::TAG_FALLBACK_SQL,
+        ))
+        .bind(POI_PICK_KIND)
+        .fetch_all(pool)
+        .await
+    }
+
     /// Quebec picks bucketed by place type, with centroid →
     /// main-entrance distance aggregates. The reviewer-chosen
     /// `place_type` (see [`PLACE_TYPES`]) wins when set; otherwise
@@ -901,6 +927,28 @@ impl PgStore {
         Ok(PoiFocusMeasurementDestinationWarningsResponse {
             warnings: destination_warnings_by_bbox(&measurements, match_radius_m),
         })
+    }
+
+    /// Per-POI CSV export joining cached picks with focus-map measurements.
+    pub async fn poi_measurement_csv_export(
+        &self,
+        match_radius_m: f64,
+    ) -> Result<String, sqlx::Error> {
+        let picks = self.read_all_poi_picks().await?;
+        let measurements = self.list_all_poi_focus_measurements().await?;
+        let quebec_bbox_ids: HashSet<Uuid> =
+            Self::quebec_bbox_ids(&self.pool).await?.into_iter().collect();
+        let quebec_place_types: HashMap<Uuid, String> = Self::quebec_classified_picks(&self.pool)
+            .await?
+            .into_iter()
+            .collect();
+        Ok(crate::poi_measurement_export::format_poi_measurement_csv(
+            &picks,
+            &measurements,
+            &quebec_bbox_ids,
+            &quebec_place_types,
+            match_radius_m,
+        ))
     }
 
     /// Count picked POIs per country — Quebec POIs are pulled out into

@@ -28,6 +28,7 @@
 //! - `GET  /api/analyses/poi_focus_measurement_stats` → min/max/avg/median length and duration by attribute pairs
 //! - `GET  /api/analyses/poi_focus_measurement_destination_warnings` → per-POI destination mismatch warnings
 //! - `GET  /api/analyses/poi_pick_country_stats` → POI counts per country (+ Quebec subset) via PostGIS
+//! - `GET  /api/analyses/poi_measurements.csv` → per-POI measurement export (CSV)
 //!
 //! The server is stateless between requests: the client echoes the
 //! full bbox back on decision, which lets us persist it in a single
@@ -38,7 +39,8 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, patch, post},
     Json, Router,
 };
@@ -159,6 +161,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/analyses/poi_pick_country_stats",
             get(poi_pick_country_stats_handler),
+        )
+        .route(
+            "/api/analyses/poi_measurements.csv",
+            get(poi_measurements_csv_handler),
         )
         .with_state(state)
 }
@@ -886,6 +892,25 @@ async fn poi_focus_measurement_destination_warnings_handler(
         .await
         .map_err(internal)?;
     Ok(Json(body))
+}
+
+async fn poi_measurements_csv_handler(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let csv = state
+        .store
+        .poi_measurement_csv_export(state.config.measurement_destination_match_radius_m)
+        .await
+        .map_err(internal)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"poi_measurements.csv\"",
+            ),
+        ],
+        csv,
+    )
+        .into_response())
 }
 
 #[derive(Debug, Serialize)]

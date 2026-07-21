@@ -24,6 +24,7 @@ pub mod overpass;
 pub mod place_types;
 pub mod poi_config;
 pub mod poi_display_name;
+pub mod poi_measurement_export;
 pub mod poi_focus;
 pub mod sampler;
 pub mod storage;
